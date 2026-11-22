@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AFTERBURN - Fighter Jet Flight Game</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fly fighter jets, dogfight, or stand at an airshow and hear the Doppler effect as jets roar past.">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="hud"></canvas>
+
+<div id="ui">
+
+  <!-- ===== loading ===== -->
+  <div id="loading" class="screen center">
+    <div class="spinner"></div>
+    <p>Building the world...</p>
+  </div>
+
+  <!-- ===== main menu ===== -->
+  <div id="menu" class="screen hidden">
+    <div class="menu-inner">
+      <div class="brand">
+        <div class="logo">AFTERBURN</div>
+        <div class="tagline">Fly fighter jets. Or just watch them roar past &mdash; and hear the Doppler effect.</div>
+      </div>
+      <div class="menu-buttons">
+        <button class="big primary" data-act="fly">
+          <span class="bt">FLY &middot; DOGFIGHT</span>
+          <span class="bs">Take the stick. Waves of enemy fighters, guns and homing missiles.</span>
+        </button>
+        <button class="big" data-act="free">
+          <span class="bt">FREE FLIGHT</span>
+          <span class="bs">No enemies. Cruise the mountains, coast and clouds.</span>
+        </button>
+        <button class="big accent" data-act="watch">
+          <span class="bt">WATCH FLYBYS &middot; DOPPLER LAB</span>
+          <span class="bs">Stand at the airshow. Jets scream past &mdash; hear the pitch fall as they go by.</span>
+        </button>
+        <div class="menu-small">
+          <button data-act="controls">Controls</button>
+          <button data-act="settings">Settings</button>
+        </div>
+      </div>
+      <div class="menu-foot">Best with headphones &middot; Chrome, Edge or Firefox on desktop</div>
+    </div>
+  </div>
+
+  <!-- ===== controls modal ===== -->
+  <div id="modal-controls" class="modal hidden">
+    <div class="card">
+      <h2>Controls</h2>
+      <div class="cols">
+        <div>
+          <h3>Flying</h3>
+          <table class="keys">
+            <tr><td><kbd>W</kbd> <kbd>S</kbd> / <kbd>&uarr;</kbd> <kbd>&darr;</kbd></td><td>Pitch (S / &darr; = pull up)</td></tr>
+            <tr><td><kbd>A</kbd> <kbd>D</kbd> / <kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>Roll left / right</td></tr>
+            <tr><td><kbd>Q</kbd> <kbd>E</kbd></td><td>Rudder (yaw)</td></tr>
+            <tr><td><kbd>Shift</kbd></td><td>Afterburner (hold)</td></tr>
+            <tr><td><kbd>X</kbd> / <kbd>Z</kbd></td><td>Air brake (hold)</td></tr>
+            <tr><td><kbd>Space</kbd> / Left click</td><td>Cannon</td></tr>
+            <tr><td><kbd>F</kbd> / Right click</td><td>Homing missile (lock first)</td></tr>
+            <tr><td><kbd>R</kbd> / <kbd>Tab</kbd></td><td>Select next target</td></tr>
+            <tr><td><kbd>V</kbd></td><td>Chase / cockpit camera</td></tr>
+            <tr><td><kbd>P</kbd> / <kbd>Esc</kbd></td><td>Pause</td></tr>
+          </table>
+        </div>
+        <div>
+          <h3>Watching flybys</h3>
+          <table class="keys">
+            <tr><td><kbd>Space</kbd></td><td>Launch the plane (it only flies when you press this)</td></tr>
+            <tr><td><kbd>R</kbd></td><td>Reset the plane</td></tr>
+            <tr><td>Mouse drag</td><td>Look around (turns off auto-track)</td></tr>
+            <tr><td>Mouse wheel</td><td>Zoom (binoculars)</td></tr>
+            <tr><td><kbd>T</kbd></td><td>Auto-track camera on / off</td></tr>
+            <tr><td><kbd>Z</kbd></td><td>Auto zoom on / off</td></tr>
+            <tr><td><kbd>D</kbd></td><td>Wave diagram &amp; graphs on / off</td></tr>
+            <tr><td><kbd>B</kbd></td><td>dB (sound level) meter on / off</td></tr>
+            <tr><td><kbd>M</kbd></td><td>Doppler effect on / off (compare!)</td></tr>
+            <tr><td><kbd>H</kbd></td><td>Hide / show panels</td></tr>
+            <tr><td><kbd>C</kbd></td><td>Camera: ground &harr; riding the jet</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Pause / menu</td></tr>
+          </table>
+          <h3>Gamepad</h3>
+          <p class="muted">Left stick: roll / pitch &middot; Right stick X: rudder &middot; RT: afterburner &middot; LT: brake &middot; A: cannon &middot; B: missile</p>
+        </div>
+      </div>
+      <div class="row end"><button class="primary" data-close>Close</button></div>
+    </div>
+  </div>
+
+  <!-- ===== settings modal ===== -->
+  <div id="modal-settings" class="modal hidden">
+    <div class="card narrow">
+      <h2>Settings</h2>
+      <label class="field"><span>Master volume</span><input type="range" id="s-volume" min="0" max="1" step="0.01"><output id="s-volume-o"></output></label>
+      <label class="field"><span>Graphics quality</span>
+        <select id="s-quality"><option value="low">Low</option><option value="med">Medium</option><option value="high">High</option></select></label>
+      <label class="field"><span>Units</span>
+        <select id="s-units"><option value="imperial">Knots / feet</option><option value="metric">km/h / metres</option></select></label>
+      <label class="check"><input type="checkbox" id="s-invert"> Invert pitch (W = pull up)</label>
+      <label class="check"><input type="checkbox" id="s-assist"> Flight assist (self-levelling wings)</label>
+      <label class="check"><input type="checkbox" id="s-mouse"> Mouse flight (click the game to capture mouse)</label>
+      <p class="muted small">Quality changes apply the next time you start a mode.</p>
+      <div class="row end"><button class="primary" data-close>Done</button></div>
+    </div>
+  </div>
+
+  <!-- ===== pause ===== -->
+  <div id="pause" class="screen center hidden">
+    <div class="card narrow">
+      <h2>Paused</h2>
+      <div class="stack">
+        <button class="primary" data-act="resume">Resume</button>
+        <button data-act="restart">Restart</button>
+        <button data-act="controls">Controls</button>
+        <button data-act="settings">Settings</button>
+        <button data-act="menu">Main menu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== game over ===== -->
+  <div id="gameover" class="screen center hidden">
+    <div class="card narrow">
+      <h2 id="go-title">Shot down</h2>
+      <p id="go-text" class="big-text"></p>
+      <div class="stack">
+        <button class="primary" data-act="restart">Fly again</button>
+        <button data-act="menu">Main menu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== watch mode panel ===== -->
+  <div id="watchui" class="side hidden">
+    <div class="side-head">
+      <span class="side-title">DOPPLER LAB</span>
+      <span class="head-btns">
+        <button class="mini" id="w-menu" title="Pause / main menu (Esc)">Menu</button>
+        <button class="icon" id="w-hide" title="Hide panels (H)">&times;</button>
+      </span>
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Formation</div>
+      <div class="seg" id="w-formation">
+        <button data-val="solo">Solo</button>
+        <button data-val="pair" class="on">Pair</button>
+        <button data-val="diamond">Diamond</button>
+        <button data-val="trail">Trail&nbsp;&times;3</button>
+      </div>
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Speed <b id="w-mach-val"></b></div>
+      <input type="range" id="w-mach" min="0.3" max="1.5" step="0.01">
+      <div class="ticks"><span>slow</span><span>Mach 1</span><span>supersonic</span></div>
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Altitude <b id="w-alt-val"></b></div>
+      <input type="range" id="w-alt" min="30" max="1200" step="10">
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Passes you at <b id="w-off-val"></b></div>
+      <input type="range" id="w-off" min="20" max="1500" step="10">
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Doppler effect <b id="w-dop-val"></b></div>
+      <input type="range" id="w-dop" min="0" max="2" step="0.05">
+      <div class="ticks"><span>off</span><span>real</span><span>2&times;</span></div>
+    </div>
+
+    <div class="grp two">
+      <div>
+        <div class="lbl">Flight style</div>
+        <select id="w-style">
+          <option value="straight">Straight pass</option>
+          <option value="climb">Pass &amp; pull up</option>
+          <option value="roll">Barrel roll</option>
+          <option value="orbit">Circle around you</option>
+          <option value="random">Surprise me</option>
+        </select>
+      </div>
+      <div>
+        <div class="lbl">Flies past</div>
+        <select id="w-dir">
+          <option value="ltr">Left &rarr; right</option>
+          <option value="rtl">Right &rarr; left</option>
+          <option value="alt">Alternating</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="grp checks">
+      <label><input type="checkbox" id="w-ab"> Afterburner</label>
+      <label><input type="checkbox" id="w-smoke"> Smoke trails</label>
+      <label><input type="checkbox" id="w-track"> Auto-track camera</label>
+      <label><input type="checkbox" id="w-zoom"> Auto zoom</label>
+      <label><input type="checkbox" id="w-diagram"> Diagram &amp; graphs</label>
+      <label><input type="checkbox" id="w-meter"> dB meter</label>
+      <label><input type="checkbox" id="w-labels"> Jet labels</label>
+    </div>
+
+    <div class="grp row">
+      <button class="primary grow" id="w-launch">&#9654; Launch plane <kbd>Space</kbd></button>
+    </div>
+    <div class="grp row">
+      <button class="grow" id="w-reset" title="Reset plane (R)">&#8634; Reset plane</button>
+      <button class="grow" id="w-cam">Camera: ground</button>
+    </div>
+    <div class="hint">The plane only flies when you press <kbd>Space</kbd>; <kbd>R</kbd> puts it back. Drag to look &middot; wheel to zoom &middot; <kbd>M</kbd> toggles Doppler to hear the difference.</div>
+  </div>
+
+  <div id="toast"></div>
+</div>
+
+<script src="lib/three.min.js" charset="utf-8"></script>
+<script src="js/util.js" charset="utf-8"></script>
+<script src="js/world.js" charset="utf-8"></script>
+<script src="js/particles.js" charset="utf-8"></script>
+<script src="js/jet.js" charset="utf-8"></script>
+<script src="js/audio.js" charset="utf-8"></script>
+<script src="js/flyby.js" charset="utf-8"></script>
+<script src="js/hud.js" charset="utf-8"></script>
+<script src="js/combat.js" charset="utf-8"></script>
+<script src="js/main.js" charset="utf-8"></script>
+</body>
+</html>
