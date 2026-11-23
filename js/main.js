@@ -66,6 +66,16 @@ App.resize = function () {
   App.hudCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 };
 
+App.recording = null; // the last flight recorded with G: {dt, n, d:[13 numbers per sample]}
+App.refreshReplayUI = function () {
+  const r = App.recording;
+  for (const id of ['m-replay', 'p-replay']) { const el = $id(id); if (el) el.classList.toggle('dim', !r); }
+  const sub = $id('m-replay-sub');
+  if (sub) sub.textContent = r
+    ? `Your ${fmtTime((r.n - 1) * r.dt)} recording. Stand anywhere on the ground and hear it fly past.`
+    : 'Press G while flying to record. Then watch it from anywhere on the ground, with Doppler sound.';
+};
+
 /* ---------- mode management --------------------------------------------------- */
 
 App.showOverlay = function (id, on) {
@@ -73,6 +83,11 @@ App.showOverlay = function (id, on) {
 };
 
 App.startMode = function (name, opts) {
+  if (App.mode && App.mode.recOn) App.mode.stopRecording(); // keep a flight that was still being recorded
+  if (name === 'replay' && !App.recording) {
+    App.toast('Nothing recorded yet — press G while flying to record', 3200);
+    return;
+  }
   if (App.mode) App.mode.exit();
   App.setPaused(false, true);
   App.showOverlay('gameover', false);
@@ -82,6 +97,11 @@ App.startMode = function (name, opts) {
     App.mode = App.modes.watch;
     App.mode.enter(false);
     App.showOverlay('menu', true);
+  } else if (name === 'replay') {
+    App.ensureAudio();
+    App.showOverlay('menu', false);
+    App.mode = App.modes.replay;
+    App.mode.enter();
   } else if (name === 'watch') {
     App.ensureAudio();
     App.showOverlay('menu', false);
@@ -244,6 +264,7 @@ function bindMenus() {
       case 'fly': App.startMode('dogfight'); break;
       case 'free': App.startMode('free'); break;
       case 'watch': App.startMode('watch'); break;
+      case 'replay': App.startMode('replay'); break;
       case 'controls': App.openModal('controls'); break;
       case 'settings': App.openModal('settings'); break;
       case 'resume': App.setPaused(false); break;
@@ -314,10 +335,12 @@ function boot() {
 
   App.modes.watch = new WatchMode(App);
   App.modes.fly = new FlyMode(App);
+  App.modes.replay = new ReplayMode(App);
   bindInput();
   bindMenus();
   bindSettings();
 
+  App.refreshReplayUI();
   App.ready = true;
   App.startMode('menu');
   $id('loading').classList.add('hidden');

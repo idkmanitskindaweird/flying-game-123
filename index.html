@@ -39,6 +39,10 @@
           <span class="bt">WATCH FLYBYS &middot; DOPPLER LAB</span>
           <span class="bs">Stand at the airshow. Jets scream past &mdash; hear the pitch fall as they go by.</span>
         </button>
+        <button class="big" data-act="replay" id="m-replay">
+          <span class="bt">REPLAY YOUR FLIGHT</span>
+          <span class="bs" id="m-replay-sub">Press G while flying to record. Then watch it from anywhere on the ground, with Doppler sound.</span>
+        </button>
         <div class="menu-small">
           <button data-act="controls">Controls</button>
           <button data-act="settings">Settings</button>
@@ -65,6 +69,7 @@
             <tr><td><kbd>F</kbd> / Right click</td><td>Homing missile (lock first)</td></tr>
             <tr><td><kbd>R</kbd> / <kbd>Tab</kbd></td><td>Select next target</td></tr>
             <tr><td><kbd>V</kbd></td><td>Chase / cockpit camera</td></tr>
+            <tr><td><kbd>G</kbd></td><td>Start / stop recording this flight (watch it from the menu: Replay)</td></tr>
             <tr><td><kbd>P</kbd> / <kbd>Esc</kbd></td><td>Pause</td></tr>
           </table>
         </div>
@@ -116,6 +121,7 @@
       <div class="stack">
         <button class="primary" data-act="resume">Resume</button>
         <button data-act="restart">Restart</button>
+        <button data-act="replay" id="p-replay">Watch recording</button>
         <button data-act="controls">Controls</button>
         <button data-act="settings">Settings</button>
         <button data-act="menu">Main menu</button>
@@ -218,18 +224,74 @@
     <div class="hint">The plane only flies when you press <kbd>Space</kbd>; <kbd>R</kbd> puts it back. Drag to look &middot; wheel to zoom &middot; <kbd>M</kbd> toggles Doppler to hear the difference.</div>
   </div>
 
+  <!-- ===== replay panel ===== -->
+  <div id="replayui" class="side hidden">
+    <div class="side-head">
+      <span class="side-title">REPLAY LAB</span>
+      <span class="head-btns">
+        <button class="mini" id="r-menu" title="Pause / main menu (Esc)">Menu</button>
+        <button class="icon" id="r-hide" title="Hide panels (H)">&times;</button>
+      </span>
+    </div>
+
+    <div class="grp row">
+      <button class="primary grow" id="r-play">&#9654; Play <kbd>Space</kbd></button>
+      <button id="r-restart" title="Restart (R)">&#8634;</button>
+    </div>
+    <div class="grp">
+      <div class="lbl">Time <b id="r-time">0:00 / 0:00</b></div>
+      <input type="range" id="r-seek" min="0" max="60" step="0.05" value="0">
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Where you stand</div>
+      <div class="grp row" style="margin:4px 0 0">
+        <button class="grow" id="r-map">Pick spot on map</button>
+        <button class="grow" id="r-under" title="Stand beside the jet (U)">Under the jet</button>
+      </div>
+    </div>
+    <div class="grp">
+      <div class="lbl">Height above ground <b id="r-h-val"></b></div>
+      <input type="range" id="r-h" min="1.7" max="600" step="1">
+    </div>
+    <div class="grp">
+      <div class="lbl">Doppler effect <b id="r-dop-val"></b></div>
+      <input type="range" id="r-dop" min="0" max="2" step="0.05">
+      <div class="ticks"><span>off</span><span>real</span><span>2&times;</span></div>
+    </div>
+
+    <div class="grp checks">
+      <label><input type="checkbox" id="r-track"> Auto-track camera</label>
+      <label><input type="checkbox" id="r-zoom"> Auto zoom</label>
+      <label><input type="checkbox" id="r-path"> Flight path line</label>
+      <label><input type="checkbox" id="r-smoke"> Smoke trail</label>
+      <label><input type="checkbox" id="r-diagram"> Diagram &amp; graphs</label>
+      <label><input type="checkbox" id="r-meter"> dB meter</label>
+      <label><input type="checkbox" id="r-labels"> Jet label</label>
+    </div>
+    <div class="grp row">
+      <button class="grow" id="r-cam">Camera: ground</button>
+    </div>
+    <div class="hint"><kbd>V</kbd> opens a top-down map: click anywhere to stand there. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk, <kbd>Q</kbd><kbd>E</kbd> change height, <kbd>&larr;</kbd><kbd>&rarr;</kbd> skip 5 s. The sound you hear is what a listener at that spot would hear.</div>
+  </div>
+
+  <button id="show-panel" class="mini hidden" title="Show the panel (H)">&#9776; Panel</button>
+  <button id="show-menu" class="mini hidden" title="Pause / main menu (Esc)">Menu</button>
+
   <div id="toast"></div>
 </div>
 
 <script src="lib/three.min.js" charset="utf-8"></script>
 <script src="js/util.js" charset="utf-8"></script>
 <script src="js/world.js" charset="utf-8"></script>
+<script src="js/city.js" charset="utf-8"></script>
 <script src="js/particles.js" charset="utf-8"></script>
 <script src="js/jet.js" charset="utf-8"></script>
 <script src="js/audio.js" charset="utf-8"></script>
 <script src="js/flyby.js" charset="utf-8"></script>
 <script src="js/hud.js" charset="utf-8"></script>
 <script src="js/combat.js" charset="utf-8"></script>
+<script src="js/replay.js" charset="utf-8"></script>
 <script src="js/main.js" charset="utf-8"></script>
 </body>
 </html>

@@ -1,4 +1,6 @@
 'use strict';
+const REC_DT = 1 / 30; // flight recordings are sampled 30 times a second
+function fmtTime(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 /* ==========================================================================
    combat.js - Dogfight / Free Flight mode
    Player jet, enemy AI, cannon, homing missiles, waves, damage, camera, audio
@@ -199,7 +201,8 @@ class FlyMode {
     const p = new Aircraft({ palette: 'steel', team: 'player', name: 'YOU' });
     p.assist = Settings.data.assist;
     const gy = app.world.surfaceAt(-1200, 140);
-    p.place(-1200, gy + 520, 140, -PI / 2, 210);
+    if (kind === 'free') p.place(0, gy + 470, 1100, 0, 210); // fly north: the city is straight ahead
+    else p.place(-1200, gy + 520, 140, -PI / 2, 210);
     p.resetHistory(app.time);
     p.syncVisual(app.time);
     app.scene.add(p.group);
@@ -224,8 +227,39 @@ class FlyMode {
     this.cleanup();
   }
 
+  /* ----- flight recorder (watched later in the Replay lab) ---------------------------- */
+
+  startRecording() {
+    if (!this.player || this.state !== 'playing') return;
+    this.recOn = true;
+    this.recAcc = 0;
+    this.recD = [];
+    this.recN = 0;
+    this.recSample();
+    this.app.toast('● RECORDING — press G to stop', 2600);
+  }
+
+  recSample() {
+    const p = this.player, d = this.recD;
+    d.push(p.pos.x, p.pos.y, p.pos.z, p.quat.x, p.quat.y, p.quat.z, p.quat.w, p.vel.x, p.vel.y, p.vel.z, p.speed, p.throttle, p.ab);
+    this.recN++;
+  }
+
+  stopRecording(silent) {
+    if (!this.recOn) return;
+    this.recOn = false;
+    if (this.recN >= 60) {
+      App.recording = { dt: REC_DT, n: this.recN, d: this.recD };
+      if (App.refreshReplayUI) App.refreshReplayUI();
+      if (!silent) this.app.toast(`Recording saved (${fmtTime((this.recN - 1) * REC_DT)}) — watch it from the menu: Replay`, 4200);
+    } else if (!silent) this.app.toast('Recording too short (needs 2 s) — discarded');
+    this.recD = null;
+  }
+
   cleanup() {
     const app = this.app;
+    this.stopRecording(true);
+    if (this.streaks) { app.scene.remove(this.streaks.lines); this.streaks.lines.geometry.dispose(); this.streaks.lines.material.dispose(); this.streaks = null; }
     if (this.player) {
       app.scene.remove(this.player.group);
       this.player = null;
@@ -322,6 +356,9 @@ class FlyMode {
         return true;
       case 'KeyF':
         this.fireMissile();
+        return true;
+      case 'KeyG':
+        if (this.recOn) this.stopRecording(); else this.startRecording();
         return true;
       case 'KeyR':
       case 'Tab':
@@ -506,6 +543,7 @@ class FlyMode {
     const p = this.player;
     if (this.state !== 'playing') return;
     this.state = 'dead';
+    this.stopRecording();
     this.deadT = 0;
     p.alive = false;
     p.group.visible = false;
@@ -677,6 +715,11 @@ class FlyMode {
       this.timeAlive += dt;
       const fire = this.readInput(dt);
       p.step(dt);
+      if (this.recOn) {
+        this.recAcc += dt;
+        while (this.recAcc >= REC_DT) { this.recAcc -= REC_DT; this.recSample(); }
+        if (this.recN > 30 * 60 * 20) this.stopRecording();
+      }
       // weapons
       this.gunT -= dt;
       if (fire && p.alive) {
@@ -694,7 +737,7 @@ class FlyMode {
 
       // ground / water collision
       const g = app.world.surfaceAt(p.pos.x, p.pos.z);
-      if (p.pos.y < g + 4) this.playerDie('CRASHED');
+      if (p.pos.y < g + 4 || app.world.cityHit(p.pos.x, p.pos.y, p.pos.z)) this.playerDie('CRASHED');
       // pull-up warning
       const ah = _ca.copy(p.vdir).multiplyScalar(p.speed * 2.2).add(p.pos);
       const clear = ah.y - app.world.surfaceAt(ah.x, ah.z);
@@ -839,9 +882,51 @@ class FlyMode {
     } else this.lockT = 0;
   }
 
+  /** Streaks of air rushing past the camera: the main cue that gives a sense of speed high above the ground. */
+  updateStreaks(p) {
+    const app = this.app, cam = app.camera, N = 170;
+    if (!this.streaks) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 6), 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, fog: false });
+      const lines = new THREE.LineSegments(geo, mat);
+      lines.frustumCulled = false;
+      lines.renderOrder = 5;
+      app.scene.add(lines);
+      this.streaks = { lines, pts: new Float32Array(N * 3), ready: false };
+    }
+    const S = this.streaks, pts = S.pts;
+    const fwd = _ca.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    const dir = p.vel.lengthSq() > 1 ? _cb.copy(p.vel).normalize() : fwd;
+    const R = 70, ahead = 130;
+    const arr = S.lines.geometry.attributes.position.array;
+    const len = clamp(p.speed * 0.09, 0, 40);
+    for (let i = 0; i < N; i++) {
+      let x = pts[i * 3], y = pts[i * 3 + 1], z = pts[i * 3 + 2];
+      const dx = x - cam.position.x, dy = y - cam.position.y, dz = z - cam.position.z;
+      const along = dx * dir.x + dy * dir.y + dz * dir.z;
+      if (!S.ready || along < -45 || dx * dx + dy * dy + dz * dz > 220 * 220) {
+        // respawn in a ring ahead of the camera, outside the cockpit area
+        const a = Math.random() * TAU, r = 9 + Math.random() * R;
+        const ux = Math.cos(a) * r, uy = Math.sin(a) * r;
+        x = cam.position.x + dir.x * (20 + Math.random() * ahead) + ux * 1.0;
+        y = cam.position.y + dir.y * (20 + Math.random() * ahead) + uy;
+        z = cam.position.z + dir.z * (20 + Math.random() * ahead);
+        pts[i * 3] = x; pts[i * 3 + 1] = y; pts[i * 3 + 2] = z;
+      }
+      arr[i * 6] = x; arr[i * 6 + 1] = y; arr[i * 6 + 2] = z;
+      arr[i * 6 + 3] = x - dir.x * len; arr[i * 6 + 4] = y - dir.y * len; arr[i * 6 + 5] = z - dir.z * len;
+    }
+    S.ready = true;
+    S.lines.geometry.attributes.position.needsUpdate = true;
+    S.lines.material.opacity = 0.7 * smoothstep(60, 220, p.speed);
+    S.lines.visible = S.lines.material.opacity > 0.01;
+  }
+
   updateCamera(dt, snap) {
     const app = this.app, cam = app.camera, p = this.player;
     if (!p) return;
+    if (this.state === 'playing') this._wantStreaks = true;
     if (this.state === 'dead') {
       this.orbit += dt * 0.45;
       cam.position.set(this.deathPos.x + Math.cos(this.orbit) * 75, this.deathPos.y + 26, this.deathPos.z + Math.sin(this.orbit) * 75);
@@ -872,6 +957,8 @@ class FlyMode {
       cam.fov += (fov - cam.fov) * (snap ? 1 : 1 - Math.exp(-dt * 4));
       cam.updateProjectionMatrix();
     }
+    cam.updateMatrixWorld(true);
+    this.updateStreaks(p);
   }
 
   showGameOver() {
@@ -888,5 +975,28 @@ class FlyMode {
 
   drawHUD(ctx, w, h) {
     drawFlightHUD(this, ctx, w, h);
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (this.recOn) {
+      const on = Math.floor(this.app.time * 1.6) % 2 === 0;
+      ctx.font = '700 14px "Segoe UI", system-ui, sans-serif';
+      const label = 'REC  ' + fmtTime((this.recN - 1) * REC_DT) + '   ·   G stops';
+      const bw = ctx.measureText(label).width + 44;
+      roundRect(ctx, w / 2 - bw / 2, 10, bw, 28, 14);
+      ctx.fillStyle = 'rgba(40,6,6,0.65)';
+      ctx.fill();
+      ctx.fillStyle = on ? '#ff4a3d' : '#7a2a26';
+      ctx.beginPath(); ctx.arc(w / 2 - bw / 2 + 17, 24, 6, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#ffd6d0';
+      ctx.fillText(label, w / 2 + 8, 24);
+    }
+    if (!this.recOn && this.state === 'playing' && this.timeAlive > 2 && this.timeAlive < 14) {
+      ctx.font = '600 13px "Segoe UI", system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(235,243,255,0.75)';
+      ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 5;
+      ctx.fillText('G — record this flight, then replay it from the ground', w / 2, 24);
+    }
+    ctx.restore();
   }
 }

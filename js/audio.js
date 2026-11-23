@@ -356,7 +356,7 @@ class AudioEngine {
       g.connect(p);
       out = p;
     }
-    out.connect(this.sfx);
+    out.connect(o.dest || this.sfx);
     src.start(t0, Math.random() * 2);
     src.stop(t0 + o.dur + 0.05);
   }
@@ -380,7 +380,7 @@ class AudioEngine {
       g.connect(p);
       out = p;
     }
-    out.connect(this.sfx);
+    out.connect(o.dest || this.sfx);
     osc.start(t0);
     osc.stop(t0 + o.dur + 0.05);
   }
@@ -450,40 +450,70 @@ class AudioEngine {
    */
   boom(rel, strength) {
     if (!this.ok) return;
-    const s = clamp(strength === undefined ? 1 : strength, 0.15, 1.4);
-    const ctx = this.ctx;
-    const sr = ctx.sampleRate;
-    const T = rand(0.09, 0.15); // N-wave duration
-    const len = Math.floor(sr * (T + 0.08));
+    const s = 0.72 * clamp(strength === undefined ? 1 : strength, 0.15, 1.4);
+    const ctx = this.ctx, sr = ctx.sampleRate, t0 = ctx.currentTime;
+    const T = rand(0.1, 0.15); // N-wave duration: the gap between the two bangs of a "double boom"
+    // The boom skips the compressor (which would squash its first few milliseconds) and goes to the master via its own bus.
+    if (!this.boomBus) { this.boomBus = ctx.createGain(); this.boomBus.gain.value = 1; this.boomBus.connect(this.master); }
+    const dest = this.boomBus;
+
+    // 1. the N-wave itself: a near-instant overpressure jump, a linear fall below ambient, then a second jump back.
+    const len = Math.floor(sr * (T + 0.3));
     const buf = ctx.createBuffer(1, len, sr);
     const dat = buf.getChannelData(0);
+    const kRise = 1 - Math.exp(-1 / (sr * 0.0006));
     let lp = 0;
-    const kRise = 1 - Math.exp(-1 / (sr * 0.0012)); // ~1 ms shock rise time
     for (let i = 0; i < len; i++) {
       const t = i / sr;
       const target = t < T ? 1 - (2 * t) / T : 0;
       lp += (target - lp) * kRise;
-      dat[i] = lp;
+      // a faint ring after each shock edge (the sensor / the air / the ground are not perfect)
+      const ring = Math.sin(t * 2 * PI * 210) * Math.exp(-t * 38) * 0.18 + Math.sin(Math.max(0, t - T) * 2 * PI * 170) * Math.exp(-Math.max(0, t - T) * 45) * 0.14 * (t >= T ? 1 : 0);
+      dat[i] = lp + ring;
     }
     const src = ctx.createBufferSource();
     src.buffer = buf;
     const lpf = ctx.createBiquadFilter();
-    lpf.type = 'lowpass'; lpf.frequency.value = 5000; lpf.Q.value = 0.5;
+    lpf.type = 'lowpass'; lpf.frequency.value = 6500; lpf.Q.value = 0.6;
+    const shaper = ctx.createWaveShaper(); // saturation: the loud transient gets thick and hard
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < curve.length; i++) { const x = (i / 1023) * 2 - 1; curve[i] = Math.tanh(x * 2.6) / Math.tanh(2.6); }
+    shaper.curve = curve;
     const g = ctx.createGain();
-    g.gain.value = 0.8 * s;
-    src.connect(lpf); lpf.connect(g);
+    g.gain.value = 1.9 * s;
+    const hpf = ctx.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 18; hpf.Q.value = 0.7;
+    src.connect(hpf); hpf.connect(lpf); lpf.connect(shaper); shaper.connect(g);
     let out = g;
     if (rel) { const p = this._panner(rel); g.connect(p); out = p; }
-    out.connect(this.sfx);
-    src.start(ctx.currentTime);
-    // the two shock edges also snap: short bright clicks at the bow and tail shocks
-    this.noiseBurst({ type: 'white', dur: 0.12, gain: 3.2 * s, f0: 700, filt: 'highpass', attack: 0.0005, rel });
-    this.noiseBurst({ type: 'pink', dur: 0.09, gain: 1.6 * s, f0: 3000, f1: 600, filt: 'lowpass', attack: 0.0005, rel });
-    this.noiseBurst({ type: 'white', dur: 0.1, gain: 2.6 * s, f0: 700, filt: 'highpass', attack: 0.0005, delay: T, rel });
-    // rumble and the building shaking afterwards
-    this.noiseBurst({ type: 'brown', dur: 2.2, gain: 0.8 * s, f0: 380, f1: 38, q: 0.5, filt: 'lowpass', attack: 0.12, delay: T + 0.05, rel });
-    this.noiseBurst({ type: 'pink', dur: 0.5, gain: 0.35 * s, f0: 1600, f1: 250, q: 0.6, filt: 'lowpass', attack: 0.003, delay: T, rel });
-    this.tone({ f0: 55, f1: 22, dur: 1.5, gain: 0.6 * s, type: 'sine', attack: 0.08, delay: T + 0.05, rel });
+    out.connect(dest);
+    src.start(t0);
+
+    // 2. the crack: a razor-sharp broadband snap at the bow shock and again at the tail shock
+    this.noiseBurst({ type: 'white', dur: 0.05, gain: 4.6 * s, f0: 1800, filt: 'highpass', attack: 0.0002, rel, dest });
+    this.noiseBurst({ type: 'white', dur: 0.03, gain: 3.6 * s, f0: 5500, filt: 'highpass', attack: 0.0002, rel, dest });
+    this.noiseBurst({ type: 'white', dur: 0.075, gain: 3.4 * s, f0: 1600, filt: 'highpass', attack: 0.0002, delay: T, rel, dest });
+    this.noiseBurst({ type: 'white', dur: 0.03, gain: 2.4 * s, f0: 5000, filt: 'highpass', attack: 0.0002, delay: T, rel, dest });
+    this.noiseBurst({ type: 'pink', dur: 0.1, gain: 1.3 * s, f0: 3200, f1: 700, q: 0.8, filt: 'bandpass', attack: 0.0003, rel, dest });
+    // 3. the boom: the thump you feel in your chest, with a deep tail
+    this.tone({ f0: 92, f1: 30, dur: 0.65, gain: 2.0 * s, type: 'sine', attack: 0.002, rel, dest });
+    this.tone({ f0: 52, f1: 20, dur: 1.5, gain: 1.3 * s, type: 'sine', attack: 0.006, delay: 0.01, rel, dest });
+    this.tone({ f0: 70, f1: 26, dur: 0.5, gain: 1.5 * s, type: 'sine', attack: 0.002, delay: T, rel, dest });
+    this.noiseBurst({ type: 'brown', dur: 3.2, gain: 1.0 * s, f0: 420, f1: 36, q: 0.5, filt: 'lowpass', attack: 0.06, delay: T + 0.02, rel, dest });
+    // 4. the crack bounces off hills and buildings: quick, bright, fading slaps (and a low rolling tail)
+    let eg = 1.5 * s, ed = 0.12;
+    for (let k = 0; k < 7; k++) {
+      ed += rand(0.07, 0.2);
+      eg *= 0.62;
+      this.noiseBurst({ type: 'white', dur: rand(0.06, 0.16), gain: eg, f0: rand(2400, 4200) / (1 + k * 0.35), f1: 500, q: 0.7, filt: 'bandpass', attack: 0.001, delay: ed, rel, dest });
+    }
+    this.noiseBurst({ type: 'pink', dur: 1.6, gain: 0.7 * s, f0: 1200, f1: 120, q: 0.5, filt: 'lowpass', attack: 0.03, delay: T + 0.05, rel, dest });
+    // 5. the ear takes a hit: everything else ducks for a moment, then returns
+    const bg = this.bus.gain;
+    bg.cancelScheduledValues(t0);
+    bg.setValueAtTime(Math.min(1, bg.value), t0);
+    bg.linearRampToValueAtTime(0.2, t0 + 0.012);
+    bg.setValueAtTime(0.2, t0 + 0.28);
+    bg.linearRampToValueAtTime(1, t0 + 1.5);
     if (this.onBoom) this.onBoom(s);
   }
 

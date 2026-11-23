@@ -109,13 +109,14 @@ class WatchMode {
     }
     if (app.audio && app.audio.ok) {
       app.audio.dopplerK = this.cfg.doppler;
-      app.audio.onBoom = (s) => { this.boomFlash = 1.6; };
+      app.audio.onBoom = (s) => { this.boomFlash = 1.6; if (this.interactive) this.shake = 1; };
     }
   }
 
   exit() {
     this.clearJets();
     document.getElementById('watchui').classList.add('hidden');
+    for (const id of ['show-panel', 'show-menu']) document.getElementById(id).classList.add('hidden');
     if (this.app.audio) this.app.audio.onBoom = null;
   }
 
@@ -209,6 +210,8 @@ class WatchMode {
     $('w-cam').addEventListener('click', () => { self.toggleCam(); $('w-cam').blur(); });
     $('w-menu').addEventListener('click', () => self.app.setPaused(true));
     $('w-hide').addEventListener('click', () => self.togglePanels());
+    $('show-panel').addEventListener('click', () => { if (self.app.mode === self) self.togglePanels(); $('show-panel').blur(); });
+    $('show-menu').addEventListener('click', () => { if (self.app.mode === self) self.app.setPaused(true); $('show-menu').blur(); });
   }
 
   syncUI() {
@@ -233,6 +236,7 @@ class WatchMode {
   togglePanels() {
     this.hideUI = !this.hideUI;
     document.getElementById('watchui').classList.toggle('hidden', this.hideUI);
+    for (const id of ['show-panel', 'show-menu']) document.getElementById(id).classList.toggle('hidden', !this.hideUI || !this.interactive);
   }
 
   toggleCam() {
@@ -449,6 +453,7 @@ class WatchMode {
     else if (best && best !== this.focus && bd < 0.7 * this.focus.pos.distanceTo(obs)) this.focus = best;
 
     this.updateCamera(dt);
+    this.applyShake(dt);
     this.updateDiagram(dt);
 
     // audio
@@ -460,6 +465,22 @@ class WatchMode {
       app.audio.update(t, L, fwd, up);
     }
     this.boomFlash = Math.max(0, this.boomFlash - dt);
+  }
+
+  /** Camera shake when a sonic boom hits: a hard jolt that dies away over ~2 s. */
+  applyShake(dt) {
+    if (!(this.shake > 0.004)) { this.shake = 0; return; }
+    this.shakeT = (this.shakeT || 0) + dt;
+    this.shake *= Math.exp(-dt * 2.2);
+    if (this.placing) return;
+    const cam = this.app.camera, a = this.shake * this.shake * (0.4 + 0.6 * this.shake);
+    const w = this.shakeT * 38;
+    cam.rotation.x += (Math.sin(w * 1.3) * 0.6 + rand(-1, 1) * 0.4) * 0.028 * a;
+    cam.rotation.y += (Math.sin(w * 1.7 + 1.1) * 0.6 + rand(-1, 1) * 0.4) * 0.028 * a;
+    cam.rotation.z += Math.sin(w * 0.9 + 2.0) * 0.02 * a;
+    cam.position.y += Math.sin(w * 2.1) * 0.35 * a;
+    cam.position.x += rand(-1, 1) * 0.2 * a;
+    cam.position.z += rand(-1, 1) * 0.2 * a;
   }
 
   listenerState() {
@@ -581,7 +602,7 @@ class WatchMode {
         const bx = j.pos.x - L.x, by = j.pos.y - L.y, bz = j.pos.z - L.z;
         const bd = Math.max(Math.sqrt(bx * bx + by * by + bz * bz), 1);
         this.boomE = Math.max(this.boomE, Math.pow(10, (140 - 18 * Math.log10(Math.max(bd, 150) / 150)) / 10));
-        this.boomFlash = 1.6;
+        this.boomFlash = 1.6; if (this.interactive) this.shake = 1;
         if (this.interactive && this.app.audio && this.app.audio.ok) this.app.audio.boom({ x: bx, y: by, z: bz }, clamp(900 / Math.max(bd, 60), 0.25, 1.1));
       }
       if (!cone || !solveRetarded(j.history, t, L.x, L.y, L.z, c, e.tau, s2)) { e.heard = false; continue; }
@@ -737,12 +758,16 @@ class WatchMode {
     ctx.shadowBlur = 5;
     ctx.fillStyle = 'rgba(235,243,255,0.8)';
     ctx.textAlign = 'left';
-    ctx.fillText('SPACE launch plane  \u00b7  R reset plane  \u00b7  M Doppler on/off  \u00b7  T auto-track  \u00b7  C ride along  \u00b7  H hide panels  \u00b7  ESC menu', 16, 22);
+    ctx.fillText(this.helpLine(), 16, 22);
     if (app.audio && !app.audio.ok) {
       ctx.fillStyle = '#ffb08a';
       ctx.fillText('Audio unavailable in this browser', 16, 42);
     }
     ctx.restore();
+  }
+
+  helpLine() {
+    return 'SPACE launch plane  \u00b7  R reset plane  \u00b7  M Doppler on/off  \u00b7  T auto-track  \u00b7  C ride along  \u00b7  H hide panels  \u00b7  ESC menu';
   }
 
   drawReadout(ctx, w, h) {
@@ -811,7 +836,7 @@ class WatchMode {
     roundRect(ctx, x, y, w, h, 12);
     ctx.clip();
 
-    const span = 3400; // metres across the panel
+    const span = this.diagSpan || 3400; // metres across the panel
     const s = w / span;
     const cx = x + w * 0.5, cy = y + h * 0.66;
     const toPx = (wx, wz) => [cx + (wx - obs.x) * s, cy + (wz - obs.z) * s];
@@ -819,8 +844,12 @@ class WatchMode {
     // faint grid (every 500 m)
     ctx.strokeStyle = 'rgba(120,150,190,0.08)';
     ctx.beginPath();
-    for (let gx = -2000; gx <= 2000; gx += 500) { const [px] = toPx(obs.x + gx, 0); ctx.moveTo(px, y); ctx.lineTo(px, y + h); }
-    for (let gz = -3000; gz <= 1000; gz += 500) { const [, py] = toPx(0, obs.z + gz); ctx.moveTo(x, py); ctx.lineTo(x + w, py); }
+    const gs = span > 9000 ? 2000 : span > 3600 ? 1000 : 500;
+    const gn = Math.ceil(span / gs / 2) + 1;
+    for (let g = -gn; g <= gn; g++) {
+      const [px] = toPx(obs.x + g * gs, 0); ctx.moveTo(px, y); ctx.lineTo(px, y + h);
+      const [, py] = toPx(0, obs.z + g * gs); ctx.moveTo(x, py); ctx.lineTo(x + w, py);
+    }
     ctx.stroke();
 
     // wave fronts (cross-section of the expanding spheres with the listener's horizontal plane)
@@ -853,7 +882,7 @@ class WatchMode {
         const a = hd + PI + sg * mu;
         ctx.beginPath();
         ctx.moveTo(jx, jy);
-        ctx.lineTo(jx + Math.cos(a) * 1500 * s * 3, jy + Math.sin(a) * 1500 * s * 3);
+        ctx.lineTo(jx + Math.cos(a) * w * 1.6, jy + Math.sin(a) * w * 1.6);
         ctx.stroke();
       }
     }

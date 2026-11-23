@@ -7,6 +7,7 @@
 
 const SUN_DIR = new THREE.Vector3(0.38, 0.58, 0.72).normalize();
 const FOG_COLOR = 0xbdd5ea;
+const CITY = { x: 0, z: -4700, hx: 3200, hz: 2600, flatR: 4300 }; // the city on the plain north of the airfield
 const PLAIN_H = 24; // elevation of the flat airfield plain (m above sea level)
 
 const QUALITY = {
@@ -247,6 +248,13 @@ class Terrain {
   /* ----- height field ----- */
 
   heightAt(x, z) {
+    const h = this._baseHeight(x, z);
+    const dc = Math.hypot(x - CITY.x, (z - CITY.z) * 0.9);
+    if (dc >= CITY.flatR + 1400) return h;
+    return h + (PLAIN_H - h) * (1 - smoothstep(CITY.flatR, CITY.flatR + 1400, dc));
+  }
+
+  _baseHeight(x, z) {
     const r = Math.sqrt(x * x + z * z * 1.21);
     if (r < 3000) return PLAIN_H;
     const hills = this.nHill.fbm(x / 2600, z / 2600, 4);
@@ -434,6 +442,7 @@ class Terrain {
         const wx = wx0 + (hash2(hx, hz, 1) - 0.5) * sp * 0.9;
         const wz = wz0 + (hash2(hx, hz, 2) - 0.5) * sp * 0.9;
         if (Math.abs(wx) < 1500 && Math.abs(wz) < 520) continue; // keep the airfield clear
+        if (Math.hypot(wx - CITY.x, (wz - CITY.z) * 0.9) < CITY.flatR + 80) continue; // ... and the city
         const fm = this.forestMask(wx, wz);
         if (fm < 0.12) continue;
         if (hash2(hx, hz, 3) > fm * 0.95) continue;
@@ -805,6 +814,7 @@ class World {
 
     this.clouds = new Clouds(scene, quality);
     this.airfield = buildAirfield(scene);
+    this.city = buildCity(scene);
     this.time = 0;
   }
 
@@ -816,6 +826,10 @@ class World {
   surfaceAt(x, z) {
     const h = this.terrain.heightAt(x, z);
     return h > 0 ? h : 0;
+  }
+
+  cityHit(x, y, z) {
+    return this.city.hit(x, y, z);
   }
 
   /** Synchronously build everything around a point (used when a mode starts). */

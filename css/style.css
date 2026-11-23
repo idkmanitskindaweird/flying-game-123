@@ -132,3 +132,11 @@ button.mini { padding: 3px 10px; font-size: 12px; border-radius: 7px; background
 button kbd { margin-left: 4px; }
 .grp.row button { white-space: nowrap; font-size: 13px; padding: 9px 8px; }
 .grp.row button.primary { font-size: 14px; }
+
+#show-panel, #show-menu { position: fixed; top: 12px; right: 12px; z-index: 6; }
+#show-menu { right: 100px; }
+#show-panel.hidden, #show-menu.hidden { display: none; }
+/* replay lab */
+button.dim { opacity: 0.55; }
+button.big.dim .bs { color: rgba(170, 190, 215, 0.55); }
+.grp.row button.on { background: var(--accent2); color: #03202e; border-color: var(--accent2); font-weight: 700; }
