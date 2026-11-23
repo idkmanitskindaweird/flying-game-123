@@ -422,7 +422,8 @@ class CrashFX {
   after(fn, x, y, z) {
     const l = this.listener;
     const d = l ? Math.hypot(x - l.x, y - l.y, z - l.z) : 0;
-    if (d > 120) setTimeout(fn, Math.min(d / SPEED_OF_SOUND, 20) * 1000); else fn();
+    const au = this.app.audio, ms = Math.min(d / SPEED_OF_SOUND, 20) * 1000;
+    if (d > 120) { if (au && au.later) au.later(fn, ms); else setTimeout(fn, ms); } else fn();
   }
 
   noise(x, y, z, kind, size) {

@@ -85,6 +85,7 @@ App.showOverlay = function (id, on) {
 };
 
 App.startMode = function (name, opts) {
+  if (App.audio && App.audio.ok) App.audio.stopAll(); // no crash roar or delayed explosion carries over into the next screen
   if (App.mode && App.mode.recOn) App.mode.stopRecording(); // keep a flight that was still being recorded
   if (name === 'replay' && !App.recording) {
     App.toast('Nothing recorded yet — press G while flying to record', 3200);

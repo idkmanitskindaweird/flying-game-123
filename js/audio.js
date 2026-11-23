@@ -237,6 +237,29 @@ class AudioEngine {
     if (this.ctx && this.ctx.state === 'suspended' && this.ctx.resume) this.ctx.resume();
   }
 
+  /** setTimeout that stopAll() can cancel (delayed crash sounds must not leak into the next screen) */
+  later(fn, ms) {
+    if (!this._timers) this._timers = new Set();
+    const id = setTimeout(() => { this._timers.delete(id); fn(); }, ms);
+    this._timers.add(id);
+    return id;
+  }
+
+  /** Cut every one-shot sound that is playing or still scheduled (called when the mode changes: menu, restart, replay...). */
+  stopAll() {
+    if (!this.ok) return;
+    if (this._timers) { for (const id of this._timers) clearTimeout(id); this._timers.clear(); }
+    const now = this.ctx.currentTime;
+    for (const [node, level] of [[this.sfx, 0.9], [this.boomBus, 1]]) {
+      if (!node) continue;
+      node.gain.cancelScheduledValues(now);
+      node.gain.setValueAtTime(node.gain.value, now);
+      node.gain.linearRampToValueAtTime(0, now + 0.06);
+      node.gain.setValueAtTime(level, now + 0.45); // back to normal for whatever starts next
+    }
+    this.clearVoices();
+  }
+
   setPaused(p) {
     if (!this.ctx || !this.ctx.suspend) return;
     if (p) this.ctx.suspend();
@@ -532,7 +555,7 @@ class AudioEngine {
     this.noiseBurst({ type: 'pink', dur: 1.4 + 0.5 * s, gain: 0.8, f0: 950, f1: 190, q: 1.0, filt: 'bandpass', attack: 0.03, delay: 0.06, rel }); // scraping along the ground
     this.tone({ f0: 66, f1: 24, dur: 1.3, gain: 1.0, type: 'sine', attack: 0.004, rel });
     this.noiseBurst({ type: 'brown', dur: 2.6, gain: 1.0, f0: 360, f1: 36, q: 0.5, filt: 'lowpass', attack: 0.05, delay: 0.1, rel });
-    for (const d of [0.5, 1.05]) setTimeout(() => this.explosion(rel, s > 1.2), d * 1000 * (0.8 + Math.random() * 0.4)); // fuel igniting
+    for (const d of [0.5, 1.05]) this.later(() => this.explosion(rel, s > 1.2), d * 1000 * (0.8 + Math.random() * 0.4)); // fuel igniting
     this.noiseBurst({ type: 'white', dur: 0.9, gain: 0.3, f0: 3000, f1: 800, q: 0.7, filt: 'bandpass', attack: 0.01, delay: 0.25, rel }); // debris rattling down
   }
 
