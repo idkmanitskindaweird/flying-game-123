@@ -107,6 +107,7 @@
         <select id="s-quality"><option value="low">Low</option><option value="med">Medium</option><option value="high">High</option><option value="epic">Epic</option><option value="ultra">Ultra</option><option value="custom">Custom</option></select></label>
       <details class="adv">
         <summary>Advanced graphics</summary>
+        <div class="advgrid">
         <label class="field"><span>Resolution</span><select id="g-res"></select></label>
         <label class="field"><span>Shadows</span><select id="g-shadows"></select></label>
         <label class="field"><span>Terrain &amp; view distance</span><select id="g-terrain"></select></label>
@@ -115,6 +116,7 @@
         <label class="field"><span>Smoke &amp; fire</span><select id="g-particles"></select></label>
         <label class="field"><span>Crash detail</span><select id="g-crash"></select></label>
         <label class="field"><span>Aircraft detail</span><select id="g-plane"></select></label>
+        </div>
         <label class="check"><input type="checkbox" id="g-aa"> Anti-aliasing (smooth edges)</label>
       </details>
       <div class="row"><button class="primary hidden" id="s-apply">Apply graphics (reloads the game)</button></div>
@@ -124,7 +126,7 @@
       <label class="check"><input type="checkbox" id="s-assist"> Flight assist (self-levelling wings)</label>
       <label class="check"><input type="checkbox" id="s-mouse"> Mouse flight (click the game to capture mouse)</label>
       <p class="muted small">Graphics changes take effect when you press Apply. Ultra needs a strong graphics card.</p>
-      <div class="row end"><button class="primary" data-close>Done</button></div>
+      <div class="row end sticky"><button class="primary" data-close>Done</button></div>
     </div>
   </div>
 

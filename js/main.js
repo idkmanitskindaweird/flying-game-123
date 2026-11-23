@@ -344,6 +344,9 @@ function bindSettings() {
     Settings.save();
   });
   bindGfx();
+  // when "Advanced graphics" is opened, scroll the settings window so the whole list is in view (it can be taller than a small screen)
+  const adv = document.querySelector('details.adv');
+  if (adv) adv.addEventListener('toggle', () => { if (adv.open) requestAnimationFrame(() => adv.scrollIntoView({ block: 'nearest', behavior: 'smooth' })); });
   $id('s-units').addEventListener('change', () => { d.units = $id('s-units').value; Settings.save(); });
   for (const [id, key] of [['s-invert', 'invert'], ['s-assist', 'assist'], ['s-mouse', 'mouse']]) {
     $id(id).addEventListener('change', () => { d[key] = $id(id).checked; Settings.save(); $id(id).blur(); });

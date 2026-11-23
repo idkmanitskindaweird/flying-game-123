@@ -142,6 +142,17 @@ details.adv { margin: 8px 0 4px; border: 1px solid rgba(160,190,230,0.2); border
 details.adv summary { cursor: pointer; font-weight: 700; padding: 4px 0; color: var(--accent2); }
 details.adv .field { margin: 8px 0; }
 #s-apply.hidden { display: none; }
+#modal-settings .card.narrow { width: min(560px, 94vw); }
+details.adv .advgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.row.sticky { position: sticky; bottom: -22px; padding: 10px 0 2px; background: linear-gradient(180deg, rgba(0,0,0,0), var(--panel-solid) 40%); z-index: 2; }
+@media (max-width: 520px) { details.adv .advgrid { grid-template-columns: 1fr; } }
+/* short screens (small laptops, zoomed-in browsers): use the whole height, start from the top, and keep every control reachable by scrolling */
+@media (max-height: 780px) {
+  .modal { align-items: flex-start; }
+  .card { max-height: 100vh; padding: 14px 18px; border-radius: 0 0 16px 16px; }
+  #modal-settings .field { margin: 8px 0; }
+  #modal-settings h2 { margin-bottom: 8px; }
+}
 /* replay slots */
 .rp-list { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 4px; }
 .rp-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 9px 12px; border: 1px solid rgba(160,190,230,0.22); border-radius: 10px; background: rgba(10,20,38,0.5); }
