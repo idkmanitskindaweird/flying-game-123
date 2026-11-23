@@ -33,7 +33,7 @@
         </button>
         <button class="big" data-act="free">
           <span class="bt">FREE FLIGHT</span>
-          <span class="bs">No enemies. Cruise the mountains, coast and clouds.</span>
+          <span class="bs">No enemies. Cruise the mountains, coast and clouds. Fly a fighter, C-17, 737 or 747 (switch below).</span>
         </button>
         <button class="big accent" data-act="watch">
           <span class="bt">WATCH FLYBYS &middot; DOPPLER LAB</span>
@@ -46,6 +46,7 @@
         <div class="menu-small">
           <button data-act="controls">Controls</button>
           <button data-act="settings">Settings</button>
+          <button data-act="plane" id="m-plane" title="Choose what you fly in Free Flight">Free Flight aircraft: Fighter jet</button>
         </div>
       </div>
       <div class="menu-foot">Best with headphones &middot; Chrome, Edge or Firefox on desktop</div>
@@ -149,6 +150,16 @@
         <button class="mini" id="w-menu" title="Pause / main menu (Esc)">Menu</button>
         <button class="icon" id="w-hide" title="Hide panels (H)">&times;</button>
       </span>
+    </div>
+
+    <div class="grp">
+      <div class="lbl">Aircraft</div>
+      <select id="w-plane">
+        <option value="fighter">Fighter jets</option>
+        <option value="c17">C-17 Globemaster III</option>
+        <option value="b737">Boeing 737</option>
+        <option value="b747">Boeing 747</option>
+      </select>
     </div>
 
     <div class="grp">
@@ -287,9 +298,12 @@
 <script src="js/city.js" charset="utf-8"></script>
 <script src="js/particles.js" charset="utf-8"></script>
 <script src="js/jet.js" charset="utf-8"></script>
+<script src="js/c17.js" charset="utf-8"></script>
+<script src="js/airliners.js" charset="utf-8"></script>
 <script src="js/audio.js" charset="utf-8"></script>
 <script src="js/flyby.js" charset="utf-8"></script>
 <script src="js/hud.js" charset="utf-8"></script>
+<script src="js/crash.js" charset="utf-8"></script>
 <script src="js/combat.js" charset="utf-8"></script>
 <script src="js/replay.js" charset="utf-8"></script>
 <script src="js/main.js" charset="utf-8"></script>

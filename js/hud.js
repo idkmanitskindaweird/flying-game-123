@@ -207,7 +207,8 @@ function drawFlightHUD(m, ctx, w, h) {
   }
 
   // ---- instruments -----------------------------------------------------------------------
-  const spd = fmtSpeed(p.speed);
+  const shown = p.heavy ? 1 : 1 / FIGHTER_SPEED; // fighters fly faster than the original tuning, but the speedometer reads on the old scale
+  const spd = fmtSpeed(p.speed * shown);
   const alt = fmtAlt(p.pos.y);
   const ground = app.world.surfaceAt(p.pos.x, p.pos.z);
   const agl = fmtAlt(Math.max(0, p.pos.y - ground));

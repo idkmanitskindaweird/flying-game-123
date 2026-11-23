@@ -517,6 +517,43 @@ class AudioEngine {
     if (this.onBoom) this.onBoom(s);
   }
 
+  /** An aircraft crash: explosion, tearing metal, a long scrape, and fuel going up. size ~1 (fighter) .. 3 (jumbo) */
+  crash(rel, size, water) {
+    if (!this.ok) return;
+    const s = clamp(size || 1, 0.6, 3);
+    if (water) {
+      this.noiseBurst({ type: 'pink', dur: 1.4, gain: 1.4, f0: 2500, f1: 300, q: 0.6, filt: 'lowpass', attack: 0.01, rel });
+      this.noiseBurst({ type: 'brown', dur: 1.8, gain: 1.2, f0: 300, f1: 40, q: 0.5, filt: 'lowpass', attack: 0.02, rel });
+      this.explosion(rel, false);
+      return;
+    }
+    this.explosion(rel, true);
+    this.noiseBurst({ type: 'white', dur: 0.4, gain: 0.9, f0: 2400, f1: 500, q: 0.8, filt: 'bandpass', attack: 0.002, rel }); // metal tearing
+    this.noiseBurst({ type: 'pink', dur: 1.4 + 0.5 * s, gain: 0.8, f0: 950, f1: 190, q: 1.0, filt: 'bandpass', attack: 0.03, delay: 0.06, rel }); // scraping along the ground
+    this.tone({ f0: 66, f1: 24, dur: 1.3, gain: 1.0, type: 'sine', attack: 0.004, rel });
+    this.noiseBurst({ type: 'brown', dur: 2.6, gain: 1.0, f0: 360, f1: 36, q: 0.5, filt: 'lowpass', attack: 0.05, delay: 0.1, rel });
+    for (const d of [0.5, 1.05]) setTimeout(() => this.explosion(rel, s > 1.2), d * 1000 * (0.8 + Math.random() * 0.4)); // fuel igniting
+    this.noiseBurst({ type: 'white', dur: 0.9, gain: 0.3, f0: 3000, f1: 800, q: 0.7, filt: 'bandpass', attack: 0.01, delay: 0.25, rel }); // debris rattling down
+  }
+
+  /** A building coming down: a deep rumble, grinding concrete and a crash of glass. size ~0.4 (house) .. 2 (tower) */
+  collapse(rel, size) {
+    if (!this.ok) return;
+    const s = clamp(size || 1, 0.3, 2.2);
+    this.noiseBurst({ type: 'brown', dur: 1.8 + 1.2 * s, gain: 1.2 * s, f0: 260, f1: 34, q: 0.5, filt: 'lowpass', attack: 0.12, rel });
+    this.noiseBurst({ type: 'pink', dur: 1.2 + 0.6 * s, gain: 0.55 * s, f0: 900, f1: 160, q: 0.9, filt: 'bandpass', attack: 0.05, delay: 0.05, rel });
+    this.noiseBurst({ type: 'white', dur: 0.5, gain: 0.3 * s, f0: 4200, f1: 1500, q: 0.7, filt: 'bandpass', attack: 0.004, delay: 0.1, rel }); // glass
+    this.tone({ f0: 48, f1: 22, dur: 1.4, gain: 0.7 * s, type: 'sine', attack: 0.05, rel });
+  }
+
+  /** A heavy chunk of wreckage hitting the ground */
+  thud(rel, size) {
+    if (!this.ok) return;
+    const s = clamp(size || 1, 0.3, 2.2);
+    this.noiseBurst({ type: 'brown', dur: 0.32, gain: 0.7 * s, f0: 420, f1: 60, q: 0.5, filt: 'lowpass', attack: 0.002, rel });
+    this.noiseBurst({ type: 'white', dur: 0.1, gain: 0.3 * s, f0: 2600, f1: 900, q: 0.8, filt: 'bandpass', attack: 0.001, rel });
+  }
+
   /** Persistent cockpit / own-aircraft engine + wind */
   createOwnEngine() {
     if (!this.ok) return null;
@@ -693,13 +730,13 @@ class ExternalJetVoice {
     const cosPhi = -(fx * ux + fy * uy + fz * uz); // +1: jet pointing at the listener
     const front = clamp(0.5 + 0.5 * cosPhi, 0, 1);
 
-    const thr = jet.throttle, ab = jet.ab;
+    const thr = jet.throttle, ab = jet.ab, hv = jet.heavy ? 1 : 0, sn = jet.heavy ? jet.spec.snd : null; // hv: a big transport aircraft
     const att = 5.2 * Math.pow(1 / (1 + d / 110), 0.8);
     const rear = 0.5 + 0.8 * (1 - front);
-    const roarG = (0.2 + 0.62 * thr * thr) * (1 + 0.9 * ab) * rear;
-    const rumG = (0.16 + 0.34 * thr + 0.85 * ab) * (0.55 + 0.6 * (1 - front));
+    const roarG = (0.2 + 0.62 * thr * thr) * (1 + 0.9 * ab) * rear * (hv ? sn.rg : 1);
+    const rumG = (0.16 + 0.34 * thr + 0.85 * ab) * (0.55 + 0.6 * (1 - front)) * (hv ? sn.rum : 1);
     const hissG = (0.035 + 0.2 * thr) * (0.3 + 0.9 * front) * (1 - 0.35 * ab);
-    const whineG = (0.012 + 0.045 * thr) * (0.12 + 1.1 * Math.pow(front, 1.6));
+    const whineG = (0.012 + 0.045 * thr) * (0.12 + 1.1 * Math.pow(front, 1.6)) * (hv ? sn.wg : 1);
     const crackleG = (0.03 + 0.34 * ab + 0.1 * thr * thr) * rear;
     const tc = 0.03;
     _set(this.roarGain.gain, roarG, now, tc);
@@ -716,12 +753,12 @@ class ExternalJetVoice {
     _set(this.crSrc.playbackRate, r, now, tc);
     _set(this.hissSrc.playbackRate, r, now, tc);
     _set(this.rumSrc.playbackRate, r, now, tc);
-    _set(this.roarLP.frequency, clamp((650 + 2300 * thr + 1000 * ab) * r, 60, 15000), now, tc);
-    _set(this.roarPeak.frequency, clamp(360 * r, 60, 8000), now, tc);
+    _set(this.roarLP.frequency, clamp((650 + 2300 * thr + 1000 * ab) * (hv ? sn.rlp : 1) * r, 60, 15000), now, tc);
+    _set(this.roarPeak.frequency, clamp((hv ? sn.peak : 360) * r, 60, 8000), now, tc);
     _set(this.crBP.frequency, clamp((1300 + 900 * ab) * r, 200, 14000), now, tc);
     _set(this.hissBP.frequency, clamp((2600 + 2400 * thr) * r, 200, 16000), now, tc);
     _set(this.rumLP.frequency, clamp((115 + 90 * ab) * r, 20, 3000), now, tc);
-    const f1 = clamp((1500 + 2600 * thr) * this.detune * r, 80, 15000);
+    const f1 = clamp((hv ? sn.w0 + sn.w1 * thr : 1500 + 2600 * thr) * this.detune * r, 80, 15000);
     _set(this.o1.frequency, f1, now, tc);
     _set(this.o2.frequency, clamp(f1 * 2.01, 80, 18000), now, tc);
     _set(this.o3.frequency, clamp(f1 * 1.37, 80, 18000), now, tc);
@@ -881,7 +918,7 @@ class OwnEngineVoice {
     this.setTarget = { thr: 0.5, ab: 0, speed: 200, cockpit: false, level: 1 };
   }
 
-  update(thr, ab, speed, cockpit, level) {
+  update(thr, ab, speed, cockpit, level, heavy) {
     if (this.dead) return;
     const now = this.audio.ctx.currentTime, tc = 0.08;
     const sp = clamp(speed / 320, 0, 1.6);
@@ -891,9 +928,9 @@ class OwnEngineVoice {
     _set(this.roarG.gain, (0.18 + 0.5 * thr * thr) * (1 + 0.8 * ab), now, tc);
     _set(this.lfoG.gain, (0.06 + 0.3 * ab) * (0.18 + 0.5 * thr * thr), now, tc);
     _set(this.lfo2G.gain, (0.12 + 0.35 * ab) * (0.18 + 0.5 * thr * thr), now, tc);
-    _set(this.roarLP.frequency, 480 + 1500 * thr + 700 * ab, now, tc);
+    _set(this.roarLP.frequency, (480 + 1500 * thr + 700 * ab) * (heavy || 1), now, tc);
     _set(this.rumG.gain, 0.15 + 0.3 * thr + 0.75 * ab, now, tc);
-    _set(this.hissG.gain, (cockpit ? 0.03 : 0.07) + 0.12 * thr, now, tc);
+    _set(this.hissG.gain, ((cockpit ? 0.03 : 0.07) + 0.12 * thr) * (heavy ? 0.55 : 1), now, tc);
     _set(this.hissBP.frequency, 2200 + 2600 * thr, now, tc);
     _set(this.windG.gain, 0.04 + 0.34 * sp * sp, now, tc);
     _set(this.windBP.frequency, 500 + 1200 * sp, now, tc);

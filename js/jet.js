@@ -4,6 +4,8 @@
    Local axes: nose = -Z, up = +Y, right = +X (same as a Three.js camera).
    ========================================================================== */
 
+const FIGHTER_SPEED = 1.6; // fighters fly this many times faster than the original tuning (cruise ~1,400 km/h, afterburner ~2,600 km/h)
+
 const JET_PALETTES = {
   steel: { body: 0x9ba6b3, belly: 0x6c7684, accent: 0x2f6bd6, canopy: 0x1b2b3d },
   enemy: { body: 0x5a6068, belly: 0x3a3f46, accent: 0xd8402c, canopy: 0x2a1c1c },
@@ -280,7 +282,7 @@ function buildJetMesh(palName) {
   group.add(flame, core);
 
   const glow = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: glowTexture(), blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false })
+    new THREE.SpriteMaterial({ map: glowTexture(), blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false, toneMapped: false })
   );
   glow.position.set(0, 0, 9.6);
   group.add(glow);
@@ -288,7 +290,7 @@ function buildJetMesh(palName) {
   // navigation lights
   const mkLight = (x, y, z, color, size) => {
     const s = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: glowTexture(), color, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false })
+      new THREE.SpriteMaterial({ map: glowTexture(), color, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false, toneMapped: false })
     );
     s.position.set(x, y, z);
     s.scale.set(size, size, 1);
@@ -366,6 +368,8 @@ class JetShadow {
       this.mesh.visible = false;
       return;
     }
+    // close to the camera the real sun shadow takes over from this blob
+    if (world.shadowOn && jet.pos.distanceTo(world.shadowCenter) < 520 && h < 700) { this.mesh.visible = false; return; }
     const sx = SUN_DIR.x / SUN_DIR.y, sz = SUN_DIR.z / SUN_DIR.y;
     let x = p.x - sx * h, z = p.z - sz * h;
     gy = world.surfaceAt(x, z);
@@ -377,7 +381,7 @@ class JetShadow {
     const f = jet.getForward(this._f);
     this.mesh.rotation.y = Math.atan2(-f.x, -f.z);
     const s = 1 + Math.min(h2, 1500) / 1500 * 0.5;
-    this.mesh.scale.set(14.5 * s, 1, 19 * s);
+    this.mesh.scale.set((jet.heavy ? jet.spec.shadow[0] * jet.spec.scale : 14.5) * s, 1, (jet.heavy ? jet.spec.shadow[1] * jet.spec.scale : 19) * s);
     this.mat.opacity = 0.55 * (1 - smoothstep(250, 2200, h2));
   }
 
@@ -409,14 +413,21 @@ class Jet {
     this.hp = 100;
     this.maxHp = 100;
     this.history = new TrackHistory(4096);
-    this.model = buildJetMesh(this.palName);
+    this.spec = (opts.type && PLANES[opts.type]) || null; // large aircraft (C-17 / 737 / 747); null for fighters
+    this.heavy = !!this.spec;
+    this.model = this.spec ? this.spec.build(!!opts.gear) : buildJetMesh(this.palName);
+    if (this.spec) this.radius = this.spec.radius * this.spec.scale / 1.25;
     this.group = this.model.group;
+    // sun shadows: the airframe throws and receives them
+    this.model.body.castShadow = this.model.body.receiveShadow = true;
+    if (this.model.canopy) this.model.canopy.castShadow = true;
     this.group.rotation.order = 'YXZ';
     this.smokeOn = false;
     this.smokeAcc = 0;
     this.damageSmoke = 0;
     this.seed = Math.random() * 100;
     this.mach = 0;
+    this.machScale = 1; // Aircraft: the player's fighter reaches "Mach 1" at FIGHTER_SPEED x the real speed of sound
     this._tmp = new THREE.Vector3();
   }
 
@@ -453,12 +464,12 @@ class Jet {
     m.core.scale.set(0.5 + 0.5 * ab, 0.5 + 0.5 * ab, len * 0.55);
     m.flame.material.opacity = 0.18 + 0.82 * ab;
     m.core.material.opacity = 0.35 + 0.65 * ab;
-    m.flame.visible = m.core.visible = this.alive;
+    m.flame.visible = m.core.visible = this.alive && !m.noFlame;
     const gs = 1.8 + this.throttle * 1.0 + ab * 3.4;
     m.glow.scale.set(gs, gs, 1);
     m.glow.material.opacity = 0.15 + 0.6 * ab + 0.1 * this.throttle;
     m.lights.strobe.visible = ((time * 1.3 + this.seed) % 1) < 0.1;
-    const M = this.speed / SPEED_OF_SOUND;
+    const M = this.speed / (SPEED_OF_SOUND * this.machScale);
     const vm = smoothstep(0.9, 0.99, M) * (1 - smoothstep(1.04, 1.2, M)) * (1 - smoothstep(2500, 5000, this.pos.y));
     m.vapor.visible = vm > 0.02;
     if (m.vapor.visible) {
@@ -478,7 +489,7 @@ class Jet {
     while (this.smokeAcc >= step) {
       this.smokeAcc -= step;
       // nozzle position
-      f.set(0, 0, 9).applyQuaternion(this.quat).add(this.pos);
+      f.set(0, 0, this.heavy ? this.spec.tail * this.spec.scale : 9).applyQuaternion(this.quat).add(this.pos);
       if (this.damageSmoke > 0) {
         const k = this.damageSmoke;
         fx.puff(f.x, f.y, f.z, rand(-2, 2), rand(0, 3), rand(-2, 2), rand(2.5, 4.5), 2 + 2 * k, 9 + 9 * k, 0.08 + 0.06 * Math.random(), 0.5 * k + 0.15, 0.8, 0.5);
@@ -514,6 +525,8 @@ class Aircraft extends Jet {
     this.dying = false;
     this.dyingT = 0;
     this._lastVdir = new THREE.Vector3(0, 0, -1);
+    this.machScale = this.heavy ? 1 : FIGHTER_SPEED;
+    if (this.spec) { this.cruise = this.spec.cruise; this.gMul = this.spec.gMul; this.assist = true; }
   }
 
   /** heading: yaw radians (0 = looking toward -Z, +ve turns left). */
@@ -545,12 +558,14 @@ class Aircraft extends Jet {
     }
 
     // --- control authority -------------------------------------------------
-    const lowAuth = smoothstep(45, 150, spd);
-    const highAuth = 1 - 0.38 * smoothstep(300, 480, spd);
+    const H = this.heavy, SP = this.spec; // big transports: slow, heavy, gentle on the controls
+    const K = H ? 1 : FIGHTER_SPEED; // fighters fly this much faster than the original tuning
+    const lowAuth = H ? smoothstep(SP.auth[0], SP.auth[1], spd) : smoothstep(45, 150, spd);
+    const highAuth = 1 - 0.38 * smoothstep(300 * K, 480 * K, spd);
     const auth = lowAuth * highAuth * (0.4 + 0.6 * Math.sqrt(rho));
-    const gMax = 11 * this.gMul;
-    const pitchCap = Math.min(62 * DEG, (gMax * 9.81) / Math.max(spd, 90));
-    const stallF = 1 - smoothstep(62, 108, spd);
+    const gMax = 11 * this.gMul * K; // more g at higher speed keeps the turn RATE the same
+    const pitchCap = Math.min((H ? SP.pitchLim : 62) * DEG, (gMax * 9.81) / Math.max(spd, 90));
+    const stallF = H ? 1 - smoothstep(SP.stall[0], SP.stall[1], spd) : 1 - smoothstep(62, 108, spd);
     this.stalled = stallF > 0.35;
 
     // in a stall the nose drops toward the flight path (weathervane) so the jet falls forward and recovers
@@ -561,8 +576,8 @@ class Aircraft extends Jet {
       stallTerm = -stallF * (0.12 + 1.4 * err);
     }
     let tp = inp.pitch * pitchCap * auth + stallTerm;
-    let tr = inp.roll * 175 * DEG * (0.3 + 0.7 * lowAuth) * (1 - 0.3 * smoothstep(330, 480, spd));
-    let ty = inp.yaw * 22 * DEG * auth;
+    let tr = inp.roll * (H ? SP.roll : 175) * DEG * (0.3 + 0.7 * lowAuth) * (1 - 0.3 * smoothstep(330 * K, 480 * K, spd));
+    let ty = inp.yaw * (H ? SP.yaw : 22) * DEG * auth;
 
     // gentle wings-level assist when the stick is centred
     if (this.assist && !this.dying && Math.abs(inp.roll) < 0.05 && Math.abs(inp.pitch) < 0.15) {
@@ -572,8 +587,8 @@ class Aircraft extends Jet {
       if (up.y > 0.15) tr += clamp(_w.y, -1, 1) * 1.15;
     }
 
-    const k1 = 1 - Math.exp(-dt * 7);
-    const k2 = 1 - Math.exp(-dt * 11);
+    const k1 = 1 - Math.exp(-dt * (H ? SP.kPitch : 7));
+    const k2 = 1 - Math.exp(-dt * (H ? SP.kRoll : 11));
     this.rates.p += (tp - this.rates.p) * k1;
     this.rates.y += (ty - this.rates.y) * k1;
     this.rates.r += (tr - this.rates.r) * k2;
@@ -591,33 +606,33 @@ class Aircraft extends Jet {
     let tgt = inp.throttle >= 0 ? inp.throttle : this.cruise;
     if (inp.boost) tgt = 1;
     if (inp.brake) tgt = 0.04;
-    this.throttle += (tgt - this.throttle) * (1 - Math.exp(-dt * 1.7));
-    const abTarget = inp.boost && this.throttle > 0.82 ? 1 : 0;
+    this.throttle += (tgt - this.throttle) * (1 - Math.exp(-dt * (H ? SP.kThr : 1.7)));
+    const abTarget = inp.boost && this.throttle > 0.82 && !H ? 1 : 0;
     this.ab += (abTarget - this.ab) * (1 - Math.exp(-dt * 3.0));
 
-    const thrust = (this.throttle * 12.5 + this.ab * 19) * (0.3 + 0.7 * Math.pow(rho, 0.8));
-    const M = spd / SPEED_OF_SOUND;
-    const cd = 1.15e-4 + 1.0e-4 * smoothstep(0.9, 1.1, M);
+    const thrust = (this.throttle * (H ? SP.thrustK : 12.5 * K * K) + this.ab * 19 * K * K) * (0.3 + 0.7 * Math.pow(rho, 0.8));
+    const M = spd / (SPEED_OF_SOUND * this.machScale);
+    const cd = 1.15e-4 + (H ? 1.0e-4 : 0.4e-4) * smoothstep(0.9, 1.1, M);
     let drag = cd * spd * spd * (0.3 + 0.7 * rho);
     if (inp.brake) drag += 3.4e-4 * spd * spd;
     const omega = Math.hypot(this.rates.p, this.rates.y);
     const nLoad = (spd * omega) / 9.81;
-    drag += 0.085 * nLoad * nLoad;
+    drag += 0.085 * nLoad * nLoad / (K * K); // the same turn costs the same fraction of thrust
     const gAlong = -9.81 * this.vdir.y;
     spd += (thrust - drag + gAlong) * dt;
-    spd = clamp(spd, 35, 560);
+    spd = H ? clamp(spd, SP.vmin, SP.vmax) : clamp(spd, 35, 560 * K * 1.1);
     this.speed = spd;
 
     // --- velocity vector follows the nose with some lag --------------------------
     const fwd = this.getForward(_v1);
-    const align = 1.8 + 3.2 * clamp(spd / 260, 0, 1.4);
+    const align = (1.8 + 3.2 * clamp(spd / (260 * K), 0, 1.4)) * (H ? SP.align : 1);
     this._lastVdir.copy(this.vdir);
     this.vdir.lerp(fwd, 1 - Math.exp(-align * dt));
     this.vdir.y -= stallF * 0.85 * dt;
     this.vdir.normalize();
     this.vel.copy(this.vdir).multiplyScalar(spd);
     this.pos.addScaledVector(this.vel, dt);
-    this.mach = spd / SPEED_OF_SOUND;
+    this.mach = spd / (SPEED_OF_SOUND * this.machScale);
 
     const turn = Math.acos(clamp(this.vdir.dot(this._lastVdir), -1, 1)) / Math.max(dt, 1e-4);
     this.nLoad += (Math.sqrt(1 + Math.pow((turn * spd) / 9.81, 2)) - this.nLoad) * (1 - Math.exp(-dt * 6));

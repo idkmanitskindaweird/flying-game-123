@@ -69,6 +69,9 @@ class ReplayMode extends WatchMode {
 
   get dur() { return this.rec ? (this.rec.n - 1) * this.rec.dt : 0; }
 
+  /** a recording that ends in a crash plays on for a while so the wreck can burn and the buildings come down */
+  endTime() { return this.dur + (this.rec && this.rec.crash ? 16 : 0); }
+
   /* ----- lifecycle --------------------------------------------------------- */
 
   enter() {
@@ -85,6 +88,10 @@ class ReplayMode extends WatchMode {
     this.placing = false;
     this.playing = false;
     this.rt = 0;
+    this.crashed = false;
+    this.shakeIn = 0;
+    if (!this.crashFx) this.crashFx = new CrashFX(app);
+    this.crashFx.clear();
     this.passes = 0;
     Object.assign(this.cfg, WATCH_DEFAULTS, { track: true, zoom: true, smoke: true, path: true, auto: false });
     this.lastDop = 1;
@@ -110,7 +117,19 @@ class ReplayMode extends WatchMode {
     const vl = Math.hypot(vx, vz) || 1;
     vx /= vl; vz /= vl;
     this.obsH = 1.7;
-    this.setObserver(d[mid] - vz * 260, d[mid + 2] + vx * 260);
+    let sx = d[mid] - vz * 260, sz = d[mid + 2] + vx * 260;
+    if (rec.crash) { // a crash: stand well back from the impact so you can watch the whole thing
+      const e = (rec.n - 1) * 13;
+      let ux = d[e + 7], uz = d[e + 9];
+      const ul = Math.hypot(ux, uz) || 1;
+      ux /= ul; uz /= ul;
+      sx = d[e] - uz * 900 - ux * 250; sz = d[e + 2] + ux * 900 - uz * 250;
+      vx = ux; vz = uz;
+    }
+    // never start inside the city (buildings would block the view): slide sideways until clear of it
+    const city = app.world.city;
+    for (let k = 0; k < 70 && city && city.inside(sx, sz, 150); k++) { sx += -vz * 100; sz += vx * 100; }
+    this.setObserver(sx, sz);
 
     this.buildPath();
     this.ensureEntry();
@@ -129,6 +148,8 @@ class ReplayMode extends WatchMode {
     const app = this.app;
     this.clearJets();
     this.jet = null;
+    if (this.crashFx) this.crashFx.clear();
+    if (app.world.city) app.world.city.reset();
     if (this.pathLine) { app.scene.remove(this.pathLine); this.pathLine.geometry.dispose(); this.pathLine.material.dispose(); this.pathLine = null; }
     document.getElementById('replayui').classList.add('hidden');
     for (const id of ['show-panel', 'show-menu']) document.getElementById(id).classList.add('hidden');
@@ -153,7 +174,7 @@ class ReplayMode extends WatchMode {
 
   ensureEntry() {
     if (this.entries.length) return;
-    const jet = new ReplayJet({ palette: 'steel', name: 'YOU' });
+    const jet = new ReplayJet({ palette: 'steel', type: this.rec.kind || 'fighter', name: 'YOU' });
     jet.smokeOn = this.cfg.smoke;
     this.jet = jet;
     const e = this.addEntry(jet, null, 1, 1e12, true);
@@ -166,6 +187,10 @@ class ReplayMode extends WatchMode {
 
   seek(rt) {
     const app = this.app;
+    this.crashFx.clear();
+    if (app.world.city) app.world.city.reset(); // going back in time: the wreck is gone and the city is whole again
+    this.crashed = false;
+    this.shakeIn = 0;
     this.rt = clamp(rt, 0, this.dur);
     this.ensureEntry();
     this.base = app.time - this.rt;
@@ -185,16 +210,33 @@ class ReplayMode extends WatchMode {
   }
 
   setPlaying(on) {
-    if (on && this.rt >= this.dur - 0.05) this.seek(0);
+    if (on && this.crashed) this.base = this.app.time - this.rt; // resume the crash in progress
+    else if (on && this.rt >= this.endTime() - 0.05) this.seek(0);
     else if (on) this.seek(this.rt); // re-anchor sound history to now
     this.playing = on;
     this.phase = on ? 'flying' : 'ready';
     this.syncUI();
   }
 
+  /** the recorded aircraft hits something: break it up (the same crash as in flight), seen and heard from where you stand */
+  triggerCrash() {
+    const app = this.app, jet = this.jet, rec = this.rec;
+    jet.poseAt(rec, this.dur);
+    this.clearJets(); // removes the intact aircraft (and wipes old smoke) before the wreck appears
+    const d = Math.max(60, Math.hypot(jet.pos.x - this.obs.x, jet.pos.y - this.obs.y, jet.pos.z - this.obs.z));
+    this.crashFx.crash(jet, { air: !!rec.crash.air, listener: this.obs });
+    this.shakeAmt = clamp(1800 / d, 0, 1.2);
+    this.shakeIn = d / SPEED_OF_SOUND; // the ground shakes when the sound arrives
+    this.crashed = true;
+    this.jet = null;
+    this.focus = null;
+    this.focusInfo = null;
+    this.phase = 'flying';
+  }
+
   finish() {
     this.playing = false;
-    this.clearJets();
+    if (!this.crashed) this.clearJets();
     this.jet = null;
     this.focus = null;
     this.phase = 'ready';
@@ -313,9 +355,9 @@ class ReplayMode extends WatchMode {
   }
 
   syncTime() {
-    const txt = `${fmtTime(this.rt)} / ${fmtTime(this.dur)}`;
+    const txt = `${fmtTime(Math.min(this.rt, this.dur))} / ${fmtTime(this.dur)}`;
     if (txt !== this.lastTimeTxt) { document.getElementById('r-time').textContent = txt; this.lastTimeTxt = txt; }
-    if (!this.scrubbing) document.getElementById('r-seek').value = this.rt;
+    if (!this.scrubbing) document.getElementById('r-seek').value = Math.min(this.rt, this.dur);
   }
 
   togglePanels() {
@@ -362,15 +404,18 @@ class ReplayMode extends WatchMode {
       this.setObserver(obs.x, obs.z); // follow the terrain (streaming may refine it)
     }
 
-    if (jet) {
-      if (this.playing) {
-        this.rt = t - this.base;
-        if (this.rt >= this.dur) {
-          this.rt = this.dur;
-          jet.poseAt(this.rec, this.rt);
-          this.finish();
-        }
+    if (this.playing) {
+      this.rt = t - this.base;
+      if (jet && this.rt >= this.dur && this.rec.crash && !this.crashed) this.triggerCrash();
+      if (this.rt >= this.endTime()) {
+        this.rt = this.endTime();
+        if (jet && !this.crashed) jet.poseAt(this.rec, this.dur);
+        this.finish();
       }
+    }
+    if (this.crashed && this.playing) {
+      this.crashFx.update(dt);
+      if (this.shakeIn > 0) { this.shakeIn -= dt; if (this.shakeIn <= 0) this.shake = Math.max(this.shake, this.shakeAmt); }
     }
     if (this.jet) {
       const j = this.jet;
@@ -429,6 +474,28 @@ class ReplayMode extends WatchMode {
   }
 
   updateCamera(dt) {
+    if (this.crashed && !this.placing && this.camMode === 'ground') {
+      // follow the wreckage: look at the biggest piece and zoom to fit it
+      const app = this.app, cam = app.camera, v = this.view, obs = this.obs;
+      const wp = this.crashFx.focus(this._v);
+      cam.position.copy(obs);
+      if (wp && this.cfg.track && !this.dragging) {
+        const dx = wp.x - obs.x, dy = wp.y - obs.y, dz = wp.z - obs.z;
+        const yt = Math.atan2(-dx, -dz), pt = Math.atan2(dy, Math.hypot(dx, dz));
+        v.yaw += clamp(wrapPi(yt - v.yaw) * 4, -1.6, 1.6) * dt;
+        v.pitch += clamp((pt - v.pitch) * 4, -1.2, 1.2) * dt;
+        if (this.cfg.zoom) {
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          const target = clamp(2 * Math.atan(160 / Math.max(dist, 80)) * RAD, 14, 58);
+          v.fov += (target - v.fov) * (1 - Math.exp(-dt * 1.5));
+        }
+      }
+      v.pitch = clamp(v.pitch, -0.5, 1.45);
+      cam.rotation.order = 'YXZ';
+      cam.rotation.set(v.pitch, v.yaw, 0);
+      if (Math.abs(cam.fov - v.fov) > 0.01) { cam.fov = v.fov; cam.updateProjectionMatrix(); }
+      return;
+    }
     super.updateCamera(dt);
     if (!this.placing) return;
     const cam = this.app.camera, m = this.map;
@@ -521,10 +588,23 @@ class ReplayMode extends WatchMode {
   drawReadout(ctx, w, h) {
     if (this.focusInfo && this.focus) { super.drawReadout(ctx, w, h); return; }
     const cx = w / 2 - (this.hideUI ? 0 : 150);
-    const main = this.lastEnd === 'complete' ? 'End of recording — press SPACE to watch again' : 'Press SPACE to play your flight';
-    const sub = this.lastEnd === 'complete' && isFinite(this.peakDb)
+    let main = this.lastEnd === 'complete' ? 'End of recording — press SPACE to watch again' : 'Press SPACE to play your flight';
+    let sub = this.lastEnd === 'complete' && isFinite(this.peakDb)
       ? `loudest ${Math.round(this.peakDb)} dB at your spot   ·   the graphs keep the whole flight`
       : 'V picks where you stand  ·  drag to look around';
+    let col = '#d8ffe6';
+    if (this.crashed) {
+      const since = Math.max(0, this.rt - this.dur);
+      const wp = this.crashFx.focusChunk ? this.crashFx.focusChunk.mesh.position : this.obs;
+      const dist = Math.hypot(wp.x - this.obs.x, wp.z - this.obs.z);
+      if (this.playing) {
+        main = this.rec.crash.air ? 'SHOT DOWN' : 'CRASH';
+        sub = `${since.toFixed(0)} s since impact   ·   ${(dist / 1000).toFixed(1)} km away   ·   the sound reaches you after ${(dist / SPEED_OF_SOUND).toFixed(1)} s`;
+        col = '#ffb08a';
+      } else if (this.lastEnd === 'complete') {
+        main = 'End of recording — press SPACE to watch the crash again';
+      }
+    }
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -536,7 +616,7 @@ class ReplayMode extends WatchMode {
     ctx.fillStyle = 'rgba(7,14,26,0.58)';
     ctx.fill();
     ctx.font = '700 22px "Segoe UI", system-ui, sans-serif';
-    ctx.fillStyle = '#d8ffe6';
+    ctx.fillStyle = col;
     ctx.fillText(main, cx, 52);
     ctx.font = '13px "Segoe UI", system-ui, sans-serif';
     ctx.fillStyle = 'rgba(228,240,255,0.92)';

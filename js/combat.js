@@ -174,6 +174,9 @@ class FlyMode {
     this.kind = kind;
     this.cleanup();
     if (!this.bullets) this.bullets = new BulletSystem(app.scene);
+    if (!this.crashFx) this.crashFx = new CrashFX(app);
+    this.crashFx.clear();
+    if (app.world.city) app.world.city.reset(); // a new game: the city is rebuilt
     this.bullets.clear();
     app.fx.clear();
     this.state = 'playing';
@@ -198,11 +201,14 @@ class FlyMode {
     app.camera.near = 2;
     app.camera.updateProjectionMatrix();
 
-    const p = new Aircraft({ palette: 'steel', team: 'player', name: 'YOU' });
+    const ptype = kind === 'free' && PLANES[Settings.data.plane] ? Settings.data.plane : 'fighter'; // Free Flight can be flown in a big transport
+    const heavy = ptype !== 'fighter';
+    this.heavy = heavy;
+    const p = new Aircraft({ palette: heavy ? 'c17' : 'steel', type: ptype, team: 'player', name: 'YOU' });
     p.assist = Settings.data.assist;
     const gy = app.world.surfaceAt(-1200, 140);
-    if (kind === 'free') p.place(0, gy + 470, 1100, 0, 210); // fly north: the city is straight ahead
-    else p.place(-1200, gy + 520, 140, -PI / 2, 210);
+    if (kind === 'free') p.place(0, gy + 470, 1100, 0, heavy ? PLANES[ptype].startSpeed : 210 * FIGHTER_SPEED); // fly north: the city is straight ahead
+    else p.place(-1200, gy + 520, 140, -PI / 2, 210 * FIGHTER_SPEED);
     p.resetHistory(app.time);
     p.syncVisual(app.time);
     app.scene.add(p.group);
@@ -235,6 +241,7 @@ class FlyMode {
     this.recAcc = 0;
     this.recD = [];
     this.recN = 0;
+    this.recKind = this.player.heavy ? this.player.spec.key : 'fighter';
     this.recSample();
     this.app.toast('● RECORDING — press G to stop', 2600);
   }
@@ -245,11 +252,12 @@ class FlyMode {
     this.recN++;
   }
 
-  stopRecording(silent) {
+  stopRecording(silent, crash) {
     if (!this.recOn) return;
+    if (crash && this.player) this.recSample(); // the very last frame: the moment of impact
     this.recOn = false;
     if (this.recN >= 60) {
-      App.recording = { dt: REC_DT, n: this.recN, d: this.recD };
+      App.recording = { dt: REC_DT, n: this.recN, d: this.recD, kind: this.recKind, crash: crash || null };
       if (App.refreshReplayUI) App.refreshReplayUI();
       if (!silent) this.app.toast(`Recording saved (${fmtTime((this.recN - 1) * REC_DT)}) — watch it from the menu: Replay`, 4200);
     } else if (!silent) this.app.toast('Recording too short (needs 2 s) — discarded');
@@ -259,6 +267,7 @@ class FlyMode {
   cleanup() {
     const app = this.app;
     this.stopRecording(true);
+    if (this.crashFx) this.crashFx.clear();
     if (this.streaks) { app.scene.remove(this.streaks.lines); this.streaks.lines.geometry.dispose(); this.streaks.lines.material.dispose(); this.streaks = null; }
     if (this.player) {
       app.scene.remove(this.player.group);
@@ -428,6 +437,7 @@ class FlyMode {
   fireMissile() {
     const p = this.player;
     if (this.state !== 'playing' || !p || !p.alive) return;
+    if (p.heavy) { this.pushMsg('NO WEAPONS', 'This aircraft is unarmed', HUD_BAD, 22, 1.5); return; }
     const audio = this.app.audio;
     if (this.missiles <= 0) { this.pushMsg('NO MISSILES', null, HUD_BAD, 22, 1.5); return; }
     const locked = this.target && this.target.alive && !this.target.dying && this.lockT >= this.lockNeed;
@@ -443,7 +453,7 @@ class FlyMode {
   makeMissile(pos, dir, vel, target, team) {
     const app = this.app;
     const m = {
-      pos: pos.clone(), dir: dir.clone().normalize(), speed: Math.max(vel.length(), 120) + 40, target, team,
+      pos: pos.clone(), dir: dir.clone().normalize(), speed: Math.max(vel.length(), 120) + 40 * FIGHTER_SPEED, target, team,
       t: 0, life: 11, history: new TrackHistory(1024), mesh: makeMissileMesh(), gone: false, vel: new THREE.Vector3(), smokeAcc: 0,
     };
     m.vel.copy(m.dir).multiplyScalar(m.speed);
@@ -459,7 +469,7 @@ class FlyMode {
     const app = this.app;
     m.t += dt;
     const burning = m.t < 5.5;
-    m.speed = burning ? Math.min(m.speed + 230 * dt, 720) : Math.max(m.speed - 30 * dt, 260);
+    m.speed = burning ? Math.min(m.speed + 230 * FIGHTER_SPEED * dt, 720 * FIGHTER_SPEED) : Math.max(m.speed - 30 * dt, 260 * FIGHTER_SPEED);
     const tg = m.target;
     let detonate = false;
     if (tg && tg.alive && !tg.dying) {
@@ -539,16 +549,28 @@ class FlyMode {
     }
   }
 
+  /** A realistic crash for any aircraft (player or enemy): the airframe breaks up, burns and scatters. */
+  crashAircraft(jet, air) {
+    const app = this.app;
+    jet.group.visible = false;
+    this.crashFx.crash(jet, { air });
+    const cp = app.camera.position;
+    const d = Math.max(40, jet.pos.distanceTo(cp));
+    const big = jet.heavy ? 2.2 : 1.3;
+    this.shake = Math.min(2.2, this.shake + (1400 * big) / (d * d) * 120 + (jet === this.player ? 0.6 : 0));
+  }
+
   playerDie(reason) {
     const p = this.player;
     if (this.state !== 'playing') return;
     this.state = 'dead';
-    this.stopRecording();
+    this.stopRecording(false, { air: reason === 'SHOT DOWN' || reason === 'MID-AIR COLLISION' });
     this.deadT = 0;
     p.alive = false;
     p.group.visible = false;
     this.deathPos.copy(p.pos);
-    this.explode(p.pos, 1.5, p.vel);
+    this.crashAircraft(p, reason === 'SHOT DOWN' || reason === 'MID-AIR COLLISION');
+    this.deathR = p.heavy ? 90 + p.spec.scale * 40 : 75;
     this.deathReason = reason;
     if (this.own) this.own.stop();
     this.own = null;
@@ -558,7 +580,7 @@ class FlyMode {
   finishEnemy(en, byGround) {
     const j = en.jet;
     j.alive = false;
-    this.explode(j.pos, 1.0, j.vel);
+    this.crashAircraft(j, !byGround);
     if (j.killedByPlayer) {
       this.kills++;
       const pts = 100 + 20 * this.wave;
@@ -590,7 +612,7 @@ class FlyMode {
     jet.gMul = 0.78 + 0.18 * skill;
     jet.maxHp = jet.hp = 90 + 9 * this.wave;
     const dx = p.pos.x - x, dz = p.pos.z - z;
-    jet.place(x, y, z, Math.atan2(-dx, -dz), 230);
+    jet.place(x, y, z, Math.atan2(-dx, -dz), 230 * FIGHTER_SPEED);
     jet.resetHistory(app.time);
     jet.syncVisual(app.time);
     app.scene.add(jet.group);
@@ -710,6 +732,7 @@ class FlyMode {
     this.hintT = Math.max(0, this.hintT - dt);
     for (const m of this.msgs) m.t += dt;
     this.msgs = this.msgs.filter((m) => m.t < m.life);
+    if (this.crashFx) this.crashFx.update(dt);
 
     if (this.state === 'playing') {
       this.timeAlive += dt;
@@ -722,7 +745,7 @@ class FlyMode {
       }
       // weapons
       this.gunT -= dt;
-      if (fire && p.alive) {
+      if (fire && p.alive && !p.heavy) {
         let n = 0;
         while (this.gunT <= 0 && n < 4) {
           this.gunT += 1 / 17;
@@ -737,7 +760,7 @@ class FlyMode {
 
       // ground / water collision
       const g = app.world.surfaceAt(p.pos.x, p.pos.z);
-      if (p.pos.y < g + 4 || app.world.cityHit(p.pos.x, p.pos.y, p.pos.z)) this.playerDie('CRASHED');
+      if (p.pos.y < g + (p.heavy ? p.spec.crash * p.spec.scale : 4) || app.world.cityHit(p.pos.x, p.pos.y, p.pos.z)) this.playerDie('CRASHED');
       // pull-up warning
       const ah = _ca.copy(p.vdir).multiplyScalar(p.speed * 2.2).add(p.pos);
       const clear = ah.y - app.world.surfaceAt(ah.x, ah.z);
@@ -748,7 +771,7 @@ class FlyMode {
       }
     } else if (this.state === 'dead') {
       this.deadT += dt;
-      if (this.deadT > 1.8 && !this.gameOverShown) this.showGameOver();
+      if (this.deadT > 3.6 && !this.gameOverShown) this.showGameOver();
     }
 
     // wave logic
@@ -834,7 +857,7 @@ class FlyMode {
       const up = _cb.set(0, 1, 0).applyQuaternion(cam.quaternion);
       const vel = p.alive ? p.vel : { x: 0, y: 0, z: 0 };
       app.audio.update(t, { x: cam.position.x, y: cam.position.y, z: cam.position.z, vx: vel.x, vy: vel.y, vz: vel.z }, fwd, up);
-      if (this.own && p.alive) this.own.update(p.throttle, p.ab, p.speed, this.camMode === 'cockpit', 1);
+      if (this.own && p.alive) this.own.update(p.throttle, p.ab, p.speed, this.camMode === 'cockpit', 1, p.heavy ? p.spec.ownLP : 0);
     }
   }
 
@@ -929,21 +952,24 @@ class FlyMode {
     if (this.state === 'playing') this._wantStreaks = true;
     if (this.state === 'dead') {
       this.orbit += dt * 0.45;
-      cam.position.set(this.deathPos.x + Math.cos(this.orbit) * 75, this.deathPos.y + 26, this.deathPos.z + Math.sin(this.orbit) * 75);
+      const wf = this.crashFx && this.crashFx.focus(_cb);
+      if (wf) this.deathPos.lerp(wf, Math.min(1, dt * 2.5));
+      const R = this.deathR || 75;
+      cam.position.set(this.deathPos.x + Math.cos(this.orbit) * R, this.deathPos.y + R * 0.35 + 8, this.deathPos.z + Math.sin(this.orbit) * R);
       cam.lookAt(this.deathPos);
       return;
     }
     let fov;
     if (this.camMode === 'chase') {
       this.camQ.slerp(p.quat, snap ? 1 : 1 - Math.exp(-dt * 7));
-      const off = _ca.set(0, 5.6, 22).applyQuaternion(this.camQ);
+      const off = p.heavy ? _ca.set(0, p.spec.chase[0] * p.spec.scale, p.spec.chase[1] * p.spec.scale).applyQuaternion(this.camQ) : _ca.set(0, 5.6, 22).applyQuaternion(this.camQ);
       cam.position.copy(p.pos).add(off);
       cam.quaternion.copy(this.camQ);
       cam.rotateX(-0.045);
       fov = 62 + 14 * smoothstep(150, 450, p.speed) + 5 * p.ab;
       p.group.visible = true;
     } else {
-      cam.position.copy(p.pos).add(_ca.set(0, 1.05, -3.9).applyQuaternion(p.quat));
+      cam.position.copy(p.pos).add((p.heavy ? _ca.set(0, p.spec.cockpit[0] * p.spec.scale, p.spec.cockpit[1] * p.spec.scale) : _ca.set(0, 1.05, -3.9)).applyQuaternion(p.quat));
       cam.quaternion.copy(p.quat);
       fov = 76;
       p.group.visible = false;

@@ -4,7 +4,7 @@
    ========================================================================== */
 
 const Settings = {
-  data: { volume: 0.8, quality: 'med', units: 'imperial', invert: false, assist: true, mouse: false },
+  data: { volume: 0.8, quality: 'med', units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
   load() {
     try {
       const s = localStorage.getItem('afterburn.settings');
@@ -70,6 +70,8 @@ App.recording = null; // the last flight recorded with G: {dt, n, d:[13 numbers 
 App.refreshReplayUI = function () {
   const r = App.recording;
   for (const id of ['m-replay', 'p-replay']) { const el = $id(id); if (el) el.classList.toggle('dim', !r); }
+  const pl = $id('m-plane');
+  if (pl) pl.textContent = 'Free Flight aircraft: ' + (PLANES[Settings.data.plane] ? PLANES[Settings.data.plane].name : 'Fighter jet');
   const sub = $id('m-replay-sub');
   if (sub) sub.textContent = r
     ? `Your ${fmtTime((r.n - 1) * r.dt)} recording. Stand anywhere on the ground and hear it fly past.`
@@ -265,6 +267,11 @@ function bindMenus() {
       case 'free': App.startMode('free'); break;
       case 'watch': App.startMode('watch'); break;
       case 'replay': App.startMode('replay'); break;
+      case 'plane':
+        { const order = ['fighter', 'c17', 'b737', 'b747']; Settings.data.plane = order[(order.indexOf(Settings.data.plane) + 1) % order.length]; }
+        Settings.save();
+        App.refreshReplayUI();
+        break;
       case 'controls': App.openModal('controls'); break;
       case 'settings': App.openModal('settings'); break;
       case 'resume': App.setPaused(false); break;
@@ -326,6 +333,10 @@ function boot() {
     return;
   }
   App.renderer = renderer;
+  renderer.shadowMap.enabled = !!App.quality.shadows;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.98;
   App.scene = new THREE.Scene();
   App.camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 2, 60000);
   App.camera.rotation.order = 'YXZ';

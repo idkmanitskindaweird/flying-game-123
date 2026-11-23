@@ -24,8 +24,9 @@ function roundRect(ctx, x, y, w, h, r) {
 
 const WATCH_DEFAULTS = {
   formation: 'pair', mach: 0.8, alt: 140, offset: 240, doppler: 1, style: 'straight', dir: 'ltr',
-  ab: false, smoke: true, track: true, zoom: true, diagram: true, meter: true, labels: true,
+  plane: 'fighter', ab: false, smoke: true, track: true, zoom: true, diagram: true, meter: true, labels: true,
 };
+const C17_MAX_MACH = 0.77; // the real C-17 cruises at about Mach 0.74
 const GRAPH_SPAN = 24; // seconds of history shown by the graphs
 
 class WatchMode {
@@ -200,6 +201,16 @@ class WatchMode {
     chk('w-diagram', 'diagram');
     chk('w-meter', 'meter');
     chk('w-labels', 'labels');
+    $('w-plane').addEventListener('change', () => {
+      cfg.plane = $('w-plane').value;
+      const sp = PLANES[cfg.plane];
+      if (sp) {
+        cfg.ab = false;
+        if (cfg.mach > sp.maxMach) { cfg.mach = sp.maxMach; self.app.toast(`The ${sp.short} tops out at Mach ${sp.maxMach}`); }
+      }
+      self.syncUI();
+      $('w-plane').blur();
+    });
     $('w-style').addEventListener('change', () => { cfg.style = $('w-style').value; $('w-style').blur(); });
     $('w-dir').addEventListener('change', () => { cfg.dir = $('w-dir').value; $('w-dir').blur(); });
     for (const b of $('w-formation').querySelectorAll('button')) {
@@ -217,6 +228,9 @@ class WatchMode {
   syncUI() {
     const $ = (id) => document.getElementById(id);
     const cfg = this.cfg;
+    $('w-plane').value = cfg.plane;
+    $('w-mach').max = PLANES[cfg.plane] ? PLANES[cfg.plane].maxMach : 1.5;
+    $('w-ab').disabled = !!PLANES[cfg.plane];
     $('w-mach').value = cfg.mach;
     const ms = cfg.mach * SPEED_OF_SOUND;
     $('w-mach-val').textContent = `Mach ${cfg.mach.toFixed(2)} · ${ms.toFixed(0)} m/s · ${(ms * 3.6).toFixed(0)} km/h`;
@@ -269,15 +283,19 @@ class WatchMode {
     else if (cfg.dir === 'rtl') dir = -1;
     else { dir = this.nextDir; this.nextDir = -this.nextDir; }
     this.passes++;
+    const spec = PLANES[cfg.plane] || null;
+    const heavy = !!spec;
+    if (spec) cfg.mach = Math.min(cfg.mach, spec.maxMach);
+    const hs = spec ? spec.hs * spec.scale : 1; // big aircraft fly much wider formations than fighters
     const speed = cfg.mach * SPEED_OF_SOUND;
     const obs = this.obs;
     const y = app.world.surfaceAt(obs.x, obs.z) + cfg.alt;
     const z = obs.z - cfg.offset;
     const startDist = clamp(speed * (cfg.startSecs || 18), 2400, 7500);
     const exitDist = startDist * 0.85;
-    const pal = pick(SHOW_PALETTES);
+    const pal = heavy ? 'c17' : pick(SHOW_PALETTES);
     const count = cfg.formation === 'trail' ? 3 : 1;
-    const ab = cfg.ab || cfg.mach >= 0.97 ? 1 : 0;
+    const ab = heavy ? 0 : cfg.ab || cfg.mach >= 0.97 ? 1 : 0;
     const theta = dir > 0 ? 0 : PI;
     for (let k = 0; k < count; k++) {
       const back = k * 430;
@@ -292,11 +310,12 @@ class WatchMode {
       } else {
         wps.push(new THREE.Vector3(obs.x + dir * exitDist, y, z));
       }
-      const leader = new ScriptedJet({ palette: pal, name: count > 1 ? 'JET ' + String.fromCharCode(65 + k) : 'JET' });
+      const leader = new ScriptedJet({ type: heavy ? cfg.plane : 'fighter', palette: pal, name: (heavy ? spec.short : 'JET') + (count > 1 ? ' ' + String.fromCharCode(65 + k) : '') });
       leader.cmdSpeed = speed;
       leader.cmdAB = ab;
       leader.ab = ab;
-      leader.throttle = ab ? 1 : 0.6 + 0.35 * smoothstep(0.3, 0.95, cfg.mach);
+      leader.throttle = heavy ? 0.5 + 0.3 * smoothstep(0.3, spec.maxMach, cfg.mach) : ab ? 1 : 0.6 + 0.35 * smoothstep(0.3, 0.95, cfg.mach);
+      if (heavy) leader.aLat = 1.6 * 9.81;
       leader.startAt(wps[0], theta, speed, wps);
       leader.terrainClear = Math.max(60, Math.min(120, cfg.alt * 0.6));
       if (style === 'roll') {
@@ -307,9 +326,9 @@ class WatchMode {
       this.addEntry(leader, null, dir, exitDist, true);
       const slots = cfg.formation === 'trail' ? [] : FORMATIONS[cfg.formation].slice(1);
       for (const s of slots) {
-        const w = new ScriptedJet({ palette: pal, name: leader.name + '+' });
+        const w = new ScriptedJet({ type: heavy ? cfg.plane : 'fighter', palette: pal, name: leader.name + '+' });
         w.leader = leader;
-        w.offset.set(s[0], s[1], s[2]);
+        w.offset.set(s[0] * hs, s[1], s[2] * hs);
         w.cmdSpeed = speed;
         w.pos.copy(leader.pos).add(this._v.copy(w.offset).applyQuaternion(leader.quat));
         w.vel.copy(leader.vel);
@@ -328,10 +347,14 @@ class WatchMode {
   launchOrbit(cfg) {
     const app = this.app, obs = this.obs;
     this.passes++;
+    const spec = PLANES[cfg.plane] || null;
+    const heavy = !!spec;
+    if (spec) cfg.mach = Math.min(cfg.mach, spec.maxMach);
+    const hs = spec ? spec.hs * spec.scale : 1;
     const speed = cfg.mach * SPEED_OF_SOUND;
     const R = Math.max(cfg.offset * 2, (speed * speed) / (2.2 * 9.81) + 150);
     const y = app.world.surfaceAt(obs.x, obs.z) + cfg.alt + 60;
-    const pal = pick(SHOW_PALETTES);
+    const pal = heavy ? 'c17' : pick(SHOW_PALETTES);
     const a0 = rand(0, TAU);
     const sgn = Math.random() < 0.5 ? 1 : -1; // direction of travel
     const wps = [];
@@ -346,20 +369,20 @@ class WatchMode {
     wps.push(new THREE.Vector3(obs.x + Math.cos(aEnd) * R - sgn * Math.sin(aEnd) * 6000, y, obs.z + Math.sin(aEnd) * R + sgn * Math.cos(aEnd) * 6000));
     const theta = Math.atan2(wps[1].z - wps[0].z, wps[1].x - wps[0].x);
     const count = cfg.formation === 'solo' ? 1 : cfg.formation === 'pair' ? 2 : cfg.formation === 'diamond' ? 4 : 3;
-    const ab = cfg.ab || cfg.mach >= 0.97 ? 1 : 0;
-    const leader = new ScriptedJet({ palette: pal, name: 'JET' });
+    const ab = heavy ? 0 : cfg.ab || cfg.mach >= 0.97 ? 1 : 0;
+    const leader = new ScriptedJet({ type: heavy ? cfg.plane : 'fighter', palette: pal, name: heavy ? spec.short : 'JET' });
     leader.cmdSpeed = speed; leader.cmdAB = ab; leader.ab = ab;
-    leader.throttle = ab ? 1 : 0.6 + 0.35 * smoothstep(0.3, 0.95, cfg.mach);
-    leader.aLat = 4 * 9.81;
+    leader.throttle = heavy ? 0.5 + 0.3 * smoothstep(0.3, spec.maxMach, cfg.mach) : ab ? 1 : 0.6 + 0.35 * smoothstep(0.3, 0.95, cfg.mach);
+    leader.aLat = (heavy ? 1.6 : 4) * 9.81;
     leader.terrainClear = 60;
     leader.startAt(wps[0], theta, speed, wps);
     const e = this.addEntry(leader, null, 1, 1e9, true);
     e.maxAge = (TAU * R * rev) / speed + 8;
     const slots = count === 3 ? FORMATIONS.diamond.slice(1, 3) : FORMATIONS[cfg.formation === 'trail' ? 'pair' : cfg.formation].slice(1);
     for (const s of slots) {
-      const w = new ScriptedJet({ palette: pal, name: leader.name + '+' });
+      const w = new ScriptedJet({ type: heavy ? cfg.plane : 'fighter', palette: pal, name: leader.name + '+' });
       w.leader = leader;
-      w.offset.set(s[0], s[1], s[2]);
+      w.offset.set(s[0] * hs, s[1], s[2] * hs);
       w.cmdSpeed = speed;
       w.pos.copy(leader.pos).add(this._v.copy(w.offset).applyQuaternion(leader.quat));
       w.vel.copy(leader.vel); w.quat.copy(leader.quat); w.speed = speed; w.ab = ab; w.throttle = leader.throttle;
@@ -613,7 +636,7 @@ class WatchMode {
       const cosPhi = sp > 30 ? -(s2.vx * dx + s2.vy * dy + s2.vz * dz) / (sp * d) : 0;
       e.heard = true;
       e.silentT = 0;
-      E += Math.pow(10, jetSPL(j.throttle, j.ab, d, cosPhi) / 10);
+      E += Math.pow(10, (jetSPL(j.throttle, j.ab, d, cosPhi) + (j.heavy ? j.spec.snd.spl : 0)) / 10);
     }
     const total = E + this.boomE;
     this.boomE *= Math.exp(-dt / 0.45);

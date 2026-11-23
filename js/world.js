@@ -8,12 +8,13 @@
 const SUN_DIR = new THREE.Vector3(0.38, 0.58, 0.72).normalize();
 const FOG_COLOR = 0xbdd5ea;
 const CITY = { x: 0, z: -4700, hx: 3200, hz: 2600, flatR: 4300 }; // the city on the plain north of the airfield
+const _swF = new THREE.Vector3(), _swR = new THREE.Vector3(), _swU = new THREE.Vector3(), _swUp = new THREE.Vector3(0, 1, 0);
 const PLAIN_H = 24; // elevation of the flat airfield plain (m above sea level)
 
 const QUALITY = {
-  low: { pixelRatio: 1, trees: 0.3, clouds: 40, maxBuild: 2, particles: 2500, terrainN: 24 },
-  med: { pixelRatio: 1.25, trees: 0.65, clouds: 70, maxBuild: 3, particles: 4500, terrainN: 28 },
-  high: { pixelRatio: 2, trees: 1.0, clouds: 110, maxBuild: 4, particles: 7000, terrainN: 32 },
+  low: { pixelRatio: 1, trees: 0.3, clouds: 40, maxBuild: 2, particles: 2500, terrainN: 24, shadows: 0 },
+  med: { pixelRatio: 1.25, trees: 0.65, clouds: 70, maxBuild: 3, particles: 4500, terrainN: 28, shadows: 1536 },
+  high: { pixelRatio: 2, trees: 1.0, clouds: 110, maxBuild: 4, particles: 7000, terrainN: 32, shadows: 2048 },
 };
 
 /* ---------- geometry helpers ------------------------------------------------ */
@@ -414,6 +415,7 @@ class Terrain {
     const ry = (maxH - minH) * 0.5 + skirt;
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(half, cy, half), Math.sqrt(half * half * 2 + ry * ry));
     const mesh = new THREE.Mesh(geo, this.mats[level]);
+    mesh.receiveShadow = true;
     mesh.position.set(x0, 0, z0);
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
@@ -468,6 +470,7 @@ class Terrain {
     im.instanceMatrix.needsUpdate = true;
     if (im.instanceColor) im.instanceColor.needsUpdate = true;
     im.frustumCulled = false;
+    im.receiveShadow = true;
     parent.add(im);
     return im;
   }
@@ -761,6 +764,22 @@ function addParkedJets(g) {
     w.position.set(x, -h - 0.3, z);
     grp.add(w);
   };
+  // a C-17 Globemaster parked beside the apron
+  {
+    const c = buildC17Mesh(true);
+    c.lights.strobe.visible = false;
+    c.group.position.set(560, PLAIN_H + 5.75 * C17_SCALE, 205);
+    c.group.rotation.y = 0.55;
+    g.add(c.group);
+  }
+  // airliners parked on the grass either side of the apron
+  for (const [kind, x, z, rot] of [['b747', -640, 235, -0.45], ['b737', 740, 300, 0.35]]) {
+    const sp = PLANES[kind], a = sp.build(true);
+    a.lights.strobe.visible = false;
+    a.group.position.set(x, PLAIN_H + a.gearBottom * sp.scale, z);
+    a.group.rotation.y = rot;
+    g.add(a.group);
+  }
   const xs = [-250, -150, -50, 50, 150, 250];
   xs.forEach((x, i) => {
     const m = buildJetMesh(pals[i % pals.length]);
@@ -789,6 +808,21 @@ class World {
     this.sunLight = new THREE.DirectionalLight(0xfff1dc, 1.0);
     this.sunLight.position.copy(SUN_DIR).multiplyScalar(1000);
     scene.add(this.sunLight);
+    scene.add(this.sunLight.target);
+    // real sun shadows around the camera: jets, buildings, hangars and wreckage throw shadows on the ground and on each other
+    this.shadowOn = !!quality.shadows;
+    this.shadowCenter = new THREE.Vector3();
+    this.shadowExtent = 760;
+    if (this.shadowOn) {
+      const L = this.sunLight;
+      L.castShadow = true;
+      L.shadow.mapSize.set(quality.shadows, quality.shadows);
+      const sc = L.shadow.camera, e = this.shadowExtent;
+      sc.left = -e; sc.right = e; sc.top = e; sc.bottom = -e; sc.near = 50; sc.far = 3600;
+      sc.updateProjectionMatrix();
+      L.shadow.bias = -0.0005;
+      L.shadow.normalBias = 0.6;
+    }
     this.hemi = new THREE.HemisphereLight(0xa9c9ff, 0x78765a, 0.66);
     scene.add(this.hemi);
 
@@ -815,6 +849,9 @@ class World {
     this.clouds = new Clouds(scene, quality);
     this.airfield = buildAirfield(scene);
     this.city = buildCity(scene);
+    for (const root of [this.airfield, this.city.group]) {
+      root.traverse((o) => { if (o.isMesh) { o.castShadow = o !== this.city.ground; o.receiveShadow = true; } });
+    }
     this.time = 0;
   }
 
@@ -826,6 +863,30 @@ class World {
   surfaceAt(x, z) {
     const h = this.terrain.heightAt(x, z);
     return h > 0 ? h : 0;
+  }
+
+  /** Keep the sun's shadow map centred on the area ahead of the camera, snapped to shadow texels so edges do not shimmer. */
+  updateShadow(camera) {
+    const L = this.sunLight, c = this.shadowCenter;
+    const fwd = _swF.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    const p = camera.position;
+    const cx = p.x + fwd.x * 220, cz = p.z + fwd.z * 220;
+    const g = this.surfaceAt(cx, cz);
+    c.set(cx, (g + Math.max(p.y, g)) * 0.5, cz);
+    const right = _swR.crossVectors(_swUp, SUN_DIR).normalize();
+    const up = _swU.crossVectors(SUN_DIR, right).normalize();
+    const texel = (2 * this.shadowExtent) / L.shadow.mapSize.x;
+    const a = Math.round(c.dot(right) / texel) * texel - c.dot(right);
+    const b = Math.round(c.dot(up) / texel) * texel - c.dot(up);
+    c.addScaledVector(right, a).addScaledVector(up, b);
+    L.target.position.copy(c);
+    L.position.copy(c).addScaledVector(SUN_DIR, 1800);
+    L.target.updateMatrixWorld();
+  }
+
+  /** ground, sea surface or rooftop, whichever is highest at (x, z) */
+  groundTop(x, z) {
+    return Math.max(this.surfaceAt(x, z), this.city.topAt(x, z));
   }
 
   cityHit(x, y, z) {
@@ -841,6 +902,8 @@ class World {
     this.time += dt;
     const p = camera.position;
     this.terrain.update(p, false);
+    this.city.update(dt);
+    if (this.shadowOn) this.updateShadow(camera);
     this.sky.position.copy(p);
     this.water.position.set(p.x, 0, p.z);
     this.waveTex.offset.set(p.x / 150 + this.time * 0.006, -p.z / 150 + this.time * 0.004);
