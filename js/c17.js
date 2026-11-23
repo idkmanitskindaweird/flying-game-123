@@ -19,7 +19,7 @@ function buildC17Mesh(landingGear) {
     [0.0, -27.2], [0.7, -27.2], [1.7, -25.2], [2.6, -21.5], [3.1, -16.5], [3.3, -10.0],
     [3.3, 10.0], [3.2, 16.5], [2.85, 20.5], [2.2, 23.6], [1.3, 25.9], [0.0, 27.2],
   ].map((p) => new THREE.Vector2(p[0], p[1]));
-  const fus = new THREE.LatheGeometry(prof, 20);
+  const fus = new THREE.LatheGeometry(prof, gfxLod(20));
   fus.rotateX(-PI / 2);
   fus.scale(1, 0.95, 1);
   const fp = fus.attributes.position;
@@ -67,11 +67,11 @@ function buildC17Mesh(landingGear) {
   for (const sx of [1, -1]) {
     for (const ax of [9.6, 17.2]) {
       const x = sx * ax, zc = zLE(ax) + 0.4, yc = -0.45;
-      const nac = new THREE.CylinderGeometry(1.38, 1.3, 7.2, 14, 1, false);
+      const nac = new THREE.CylinderGeometry(1.38, 1.3, 7.2, gfxLod(14), 1, false);
       nac.rotateX(PI / 2);
       nac.translate(x, yc, zc);
       paintGeometry(nac, 0xb7bcc2);
-      const inlet = new THREE.CylinderGeometry(1.2, 1.2, 0.5, 14, 1, false);
+      const inlet = new THREE.CylinderGeometry(1.2, 1.2, 0.5, gfxLod(14), 1, false);
       inlet.rotateX(PI / 2);
       inlet.translate(x, yc, zc - 3.55);
       paintGeometry(inlet, 0x1d1f23);
@@ -93,7 +93,7 @@ function buildC17Mesh(landingGear) {
   group.add(body);
 
   // cockpit glass and cargo-door seams
-  const canopyGeo = new THREE.SphereGeometry(1, 14, 10);
+  const canopyGeo = new THREE.SphereGeometry(1, gfxLod(14), gfxLod(10));
   canopyGeo.scale(1.35, 0.7, 2.6);
   canopyGeo.translate(0, 1.55, -21.6);
   const canopy = new THREE.Mesh(

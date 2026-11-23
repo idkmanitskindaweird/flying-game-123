@@ -18,7 +18,7 @@ function buildAirlinerMesh(p, landingGear) {
     [-0.5, 0.0], [-0.5, 0.1], [-0.465, 0.26], [-0.41, 0.5], [-0.33, 0.76], [-0.25, 0.94], [-0.2, 1.0],
     [0.3, 1.0], [0.37, 0.94], [0.43, 0.78], [0.47, 0.52], [0.495, 0.24], [0.5, 0.0],
   ].map((q) => new THREE.Vector2(q[1] * R, q[0] * L));
-  const fus = new THREE.LatheGeometry(prof, 20);
+  const fus = new THREE.LatheGeometry(prof, gfxLod(20));
   fus.rotateX(-PI / 2);
   const fp = fus.attributes.position;
   for (let i = 0; i < fp.count; i++) { // rear fuselage sweeps up under the tail
@@ -30,7 +30,7 @@ function buildAirlinerMesh(p, landingGear) {
 
   // 747 upper-deck hump
   if (p.hump) {
-    const h = new THREE.SphereGeometry(1, 16, 10);
+    const h = new THREE.SphereGeometry(1, gfxLod(16), gfxLod(10));
     h.scale(R * 0.66, R * 0.55, L * 0.12);
     h.translate(0, R * 0.78, -L * 0.34);
     twoTone(h, white, white);
@@ -89,11 +89,11 @@ function buildAirlinerMesh(p, landingGear) {
   for (const sx of [1, -1]) {
     for (const ax of p.engines) {
       const x = sx * ax, zc = zLE(ax) - ln * 0.15, yc = wy - rn * 0.95;
-      const nac = new THREE.CylinderGeometry(rn, rn * 0.88, ln, 16, 1, false);
+      const nac = new THREE.CylinderGeometry(rn, rn * 0.88, ln, gfxLod(16), 1, false);
       nac.rotateX(PI / 2);
       nac.translate(x, yc, zc);
       paintGeometry(nac, grey);
-      const inlet = new THREE.CylinderGeometry(rn * 0.86, rn * 0.86, 0.35, 16, 1, false);
+      const inlet = new THREE.CylinderGeometry(rn * 0.86, rn * 0.86, 0.35, gfxLod(16), 1, false);
       inlet.rotateX(PI / 2);
       inlet.translate(x, yc, zc - ln / 2 - 0.05);
       paintGeometry(inlet, dark);
@@ -115,7 +115,7 @@ function buildAirlinerMesh(p, landingGear) {
   group.add(body);
 
   // cockpit glass
-  const cg = new THREE.SphereGeometry(1, 12, 8);
+  const cg = new THREE.SphereGeometry(1, gfxLod(12), gfxLod(8));
   cg.scale(R * 0.62, R * 0.28, R * 0.7);
   cg.translate(0, R * 0.42, -L * 0.455);
   const canopy = new THREE.Mesh(cg, new THREE.MeshPhongMaterial({ color: 0x16212f, specular: 0xaad0ff, shininess: 150 }));

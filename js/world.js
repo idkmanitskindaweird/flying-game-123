@@ -9,13 +9,38 @@ const SUN_DIR = new THREE.Vector3(0.38, 0.58, 0.72).normalize();
 const FOG_COLOR = 0xbdd5ea;
 const CITY = { x: 0, z: -4700, hx: 3200, hz: 2600, flatR: 4300 }; // the city on the plain north of the airfield
 const _swF = new THREE.Vector3(), _swR = new THREE.Vector3(), _swU = new THREE.Vector3(), _swUp = new THREE.Vector3(0, 1, 0);
+const _cullM = new THREE.Matrix4(), _cullInv = new THREE.Matrix4();
 const PLAIN_H = 24; // elevation of the flat airfield plain (m above sea level)
 
-const QUALITY = {
-  low: { pixelRatio: 1, trees: 0.3, clouds: 40, maxBuild: 2, particles: 2500, terrainN: 24, shadows: 0 },
-  med: { pixelRatio: 1.25, trees: 0.65, clouds: 70, maxBuild: 3, particles: 4500, terrainN: 28, shadows: 1536 },
-  high: { pixelRatio: 2, trees: 1.0, clouds: 110, maxBuild: 4, particles: 7000, terrainN: 32, shadows: 2048 },
+/* ---------- graphics quality: five levels per setting ----------------------------------------------
+   Every setting has the same five levels (index 0..4 = Low, Medium, High, Epic, Ultra). A preset sets all of them to the
+   same level; "Custom" lets each one be chosen on its own. buildQuality() turns the chosen levels into the numbers the game uses. */
+const GFX_LEVELS = ['Low', 'Medium', 'High', 'Epic', 'Ultra'];
+const GFX = {
+  res: [{ pr: 1, ss: 0 }, { pr: 1.25, ss: 0 }, { pr: 2, ss: 0 }, { pr: 2, ss: 1.25 }, { pr: 2.5, ss: 1.75 }], // pr: max pixel ratio, ss: supersampling floor
+  shadows: [0, 1536, 2048, 3072, 4096], // shadow-map size (0 = off)
+  terrain: [{ n: 24, b: 2 }, { n: 28, b: 3 }, { n: 32, b: 4 }, { n: 38, b: 5 }, { n: 46, b: 6 }], // terrain mesh detail, and how many chunks may build per frame
+  trees: [0.3, 0.65, 1.0, 1.3, 1.7],
+  clouds: [40, 70, 110, 140, 180],
+  particles: [2500, 4500, 7000, 11000, 18000], // smoke and fire particles
 };
+function gfxPreset(i) { return { res: i, shadows: i, terrain: i, trees: i, clouds: i, particles: i, crash: i, plane: i, aa: i > 0 }; }
+function buildQuality(g) {
+  const c = (k, v) => clamp(v === undefined ? 1 : v, 0, 4) | 0;
+  return {
+    pixelRatio: GFX.res[c('res', g.res)].pr, ss: GFX.res[c('res', g.res)].ss,
+    shadows: GFX.shadows[c('shadows', g.shadows)],
+    terrainN: GFX.terrain[c('terrain', g.terrain)].n, maxBuild: GFX.terrain[c('terrain', g.terrain)].b,
+    trees: GFX.trees[c('trees', g.trees)], clouds: GFX.clouds[c('clouds', g.clouds)], particles: GFX.particles[c('particles', g.particles)],
+    crash: c('crash', g.crash), plane: c('plane', g.plane), aa: g.aa !== false,
+  };
+}
+const QUALITY = { low: buildQuality(gfxPreset(0)), med: buildQuality(gfxPreset(1)), high: buildQuality(gfxPreset(2)), epic: buildQuality(gfxPreset(3)), ultra: buildQuality(gfxPreset(4)) };
+/** scale a geometry segment count by the Aircraft detail setting */
+function gfxLod(n) {
+  const p = (typeof App !== 'undefined' && App.quality && App.quality.plane !== undefined) ? App.quality.plane : 2;
+  return Math.max(4, Math.round(n * [0.5, 0.75, 1, 1.5, 2.2][p]));
+}
 
 /* ---------- geometry helpers ------------------------------------------------ */
 
@@ -427,6 +452,22 @@ class Terrain {
     return { key, level, ix, iz, mesh, trees, stamp: this.stamp };
   }
 
+  /** hide the instanced trees of chunks outside the view (an InstancedMesh cannot be frustum-culled by three itself) */
+  cullTrees(frustum) {
+    let hidden = 0;
+    for (const ch of this.chunks.values()) {
+      if (!ch.trees) continue;
+      if (!ch.sph) {
+        const bs = ch.mesh.geometry.boundingSphere;
+        ch.sph = new THREE.Sphere(bs.center.clone().add(ch.mesh.position), bs.radius + 40);
+      }
+      const on = frustum.intersectsSphere(ch.sph);
+      ch.trees.visible = on;
+      if (!on) hidden++;
+    }
+    this.stats.treesHidden = hidden;
+  }
+
   _buildTrees(level, x0, z0, size, parent) {
     const q = this.quality.trees;
     const sp = (level === this.MAXL ? 8.5 : 14) / Math.sqrt(q);
@@ -813,6 +854,7 @@ class World {
     // a warm point light that flashes when something explodes, lighting up the buildings and ground around it (always present, so no shader recompiles)
     this.flashLight = new THREE.PointLight(0xffa860, 0, 1200, 1.2);
     scene.add(this.flashLight);
+    this.cullFrustum = new THREE.Frustum();
     this.shadowOn = !!quality.shadows;
     this.shadowCenter = new THREE.Vector3();
     this.shadowExtent = 760;
@@ -913,6 +955,12 @@ class World {
     const p = camera.position;
     this.terrain.update(p, false);
     this.city.update(dt);
+    // view-frustum culling for the things three cannot cull by itself
+    camera.updateMatrixWorld();
+    _cullM.multiplyMatrices(camera.projectionMatrix, _cullInv.copy(camera.matrixWorld).invert());
+    this.cullFrustum.setFromProjectionMatrix(_cullM);
+    this.city.cull(this.cullFrustum);
+    this.terrain.cullTrees(this.cullFrustum);
     if (this.shadowOn) this.updateShadow(camera);
     if (this.flashLight.intensity > 0.01) this.flashLight.intensity *= Math.exp(-dt * 2.6); else this.flashLight.intensity = 0;
     this.sky.position.copy(p);

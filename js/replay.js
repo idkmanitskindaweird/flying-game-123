@@ -75,7 +75,7 @@ class ReplayMode extends WatchMode {
   /* ----- lifecycle --------------------------------------------------------- */
 
   enter() {
-    const app = this.app, rec = App.recording;
+    const app = this.app, rec = App.replayRec || App.recording;
     this.rec = rec;
     this.interactive = true;
     this.clearJets();
@@ -125,10 +125,15 @@ class ReplayMode extends WatchMode {
       ux /= ul; uz /= ul;
       sx = d[e] - uz * 900 - ux * 250; sz = d[e + 2] + ux * 900 - uz * 250;
       vx = ux; vz = uz;
+      if (app.world.city && app.world.city.inside(d[e], d[e + 2], 100)) {
+        // a crash in the city: watch from 1.2 km away, up on a rooftop-high viewpoint, so buildings don't hide it and the sound only lags ~3.5 s
+        sx = d[e] - uz * 1200 - ux * 200; sz = d[e + 2] + ux * 1200 - uz * 200;
+        this.obsH = 240;
+      }
     }
     // never start inside the city (buildings would block the view): slide sideways until clear of it
     const city = app.world.city;
-    for (let k = 0; k < 70 && city && city.inside(sx, sz, 150); k++) { sx += -vz * 100; sz += vx * 100; }
+    for (let k = 0; k < 70 && city && this.obsH < 100 && city.inside(sx, sz, 150); k++) { sx += -vz * 100; sz += vx * 100; }
     this.setObserver(sx, sz);
 
     this.buildPath();

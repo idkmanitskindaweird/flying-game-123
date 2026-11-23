@@ -258,6 +258,7 @@ class FlyMode {
     this.recOn = false;
     if (this.recN >= 60) {
       App.recording = { dt: REC_DT, n: this.recN, d: this.recD, kind: this.recKind, crash: crash || null };
+      if (typeof ReplayStore !== 'undefined') ReplayStore.saveLatest(App.recording);
       if (App.refreshReplayUI) App.refreshReplayUI();
       if (!silent) this.app.toast(`Recording saved (${fmtTime((this.recN - 1) * REC_DT)}) — watch it from the menu: Replay`, 4200);
     } else if (!silent) this.app.toast('Recording too short (needs 2 s) — discarded');

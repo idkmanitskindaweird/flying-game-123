@@ -7,6 +7,10 @@
    rain down. Each piece leaves a smoke trail and rests burning where it stops.
    ========================================================================== */
 
+/** crash detail by level (Low..Ultra): how many pieces may exist, how many small shards a plane breaks into, buildings that can fall, cells per slab */
+const CRASH_Q = { cap: [450, 900, 1400, 2100, 3200], shards: [0.3, 0.65, 1, 1.5, 2.2], blast: [30, 55, 80, 110, 160], cells: [2, 3, 4, 5, 6] };
+function crashLevel() { return (typeof App !== 'undefined' && App.quality && App.quality.crash !== undefined) ? App.quality.crash : 2; }
+
 const PLANE_DIMS = {
   c17: { L: 53, R: 3.3, span: 52, finH: 10, engines: [[9.6, 1], [17.2, 1]] },
   b737: { L: 39.5, R: 1.95, span: 35.8, finH: 6.6, engines: [[5.9, 1]] },
@@ -140,6 +144,7 @@ class CrashFX {
 
   /** a spray of small torn-off plates scattered over the airframe (n pieces, within `reach` metres of the centre) */
   addShrapnel(parts, n, reach, colors) {
+    n = Math.round(n * CRASH_Q.shards[crashLevel()]);
     for (let i = 0; i < n; i++) {
       // every fourth piece is a larger torn panel, the rest are small plates and splinters
       const s = (i % 4 === 0 ? rand(0.9, 2.2) * (1 + reach * 0.06) : rand(0.2, 1.1) * (1 + reach * 0.03));
@@ -368,9 +373,10 @@ class CrashFX {
     const imp = bl.imp;
     let ix = 0, iz = 0, k = 0.4;
     if (imp) { ix = bl.x - imp.x; iz = bl.z - imp.z; const il = Math.hypot(ix, iz) || 1; ix /= il; iz /= il; k = clamp(1 - imp.d / imp.R, 0.15, 1); }
-    const cols = clamp(Math.round(hw * 2 / 8), 1, 4), rows = clamp(Math.round(hd * 2 / 8), 1, 4), lays = hh > 18 ? 2 : 1;
+    const cm = CRASH_Q.cells[crashLevel()];
+    const cols = clamp(Math.round(hw * 2 / 8), 1, cm), rows = clamp(Math.round(hd * 2 / 8), 1, cm), lays = hh > 18 ? 2 : 1;
     const sx = hw * 2 / cols, sz = hd * 2 / rows, sy = hh / lays;
-    if (this.chunks.length < 1400) {
+    if (this.chunks.length < CRASH_Q.cap[crashLevel()]) {
       const tone = new THREE.Color(bl.color).multiplyScalar(rand(0.55, 0.85)); // already blackened by the blast
       for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) for (let l = 0; l < lays; l++) {
         const px = bx - hw + (c + 0.5) * sx, pz = bz - hd + (r + 0.5) * sz, py = yBot + (l + 0.5) * sy;
@@ -422,7 +428,7 @@ class CrashFX {
   after(fn, x, y, z) {
     const l = this.listener;
     const d = l ? Math.hypot(x - l.x, y - l.y, z - l.z) : 0;
-    const au = this.app.audio, ms = Math.min(d / SPEED_OF_SOUND, 20) * 1000;
+    const au = this.app.audio, ms = Math.min(d / SPEED_OF_SOUND, 5) * 1000;
     if (d > 120) { if (au && au.later) au.later(fn, ms); else setTimeout(fn, ms); } else fn();
   }
 

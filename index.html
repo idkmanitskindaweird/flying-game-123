@@ -103,14 +103,37 @@
     <div class="card narrow">
       <h2>Settings</h2>
       <label class="field"><span>Master volume</span><input type="range" id="s-volume" min="0" max="1" step="0.01"><output id="s-volume-o"></output></label>
-      <label class="field"><span>Graphics quality</span>
-        <select id="s-quality"><option value="low">Low</option><option value="med">Medium</option><option value="high">High</option></select></label>
+      <label class="field"><span>Graphics preset</span>
+        <select id="s-quality"><option value="low">Low</option><option value="med">Medium</option><option value="high">High</option><option value="epic">Epic</option><option value="ultra">Ultra</option><option value="custom">Custom</option></select></label>
+      <details class="adv">
+        <summary>Advanced graphics</summary>
+        <label class="field"><span>Resolution</span><select id="g-res"></select></label>
+        <label class="field"><span>Shadows</span><select id="g-shadows"></select></label>
+        <label class="field"><span>Terrain &amp; view distance</span><select id="g-terrain"></select></label>
+        <label class="field"><span>Trees</span><select id="g-trees"></select></label>
+        <label class="field"><span>Clouds</span><select id="g-clouds"></select></label>
+        <label class="field"><span>Smoke &amp; fire</span><select id="g-particles"></select></label>
+        <label class="field"><span>Crash detail</span><select id="g-crash"></select></label>
+        <label class="field"><span>Aircraft detail</span><select id="g-plane"></select></label>
+        <label class="check"><input type="checkbox" id="g-aa"> Anti-aliasing (smooth edges)</label>
+      </details>
+      <div class="row"><button class="primary hidden" id="s-apply">Apply graphics (reloads the game)</button></div>
       <label class="field"><span>Units</span>
         <select id="s-units"><option value="imperial">Knots / feet</option><option value="metric">km/h / metres</option></select></label>
       <label class="check"><input type="checkbox" id="s-invert"> Invert pitch (W = pull up)</label>
       <label class="check"><input type="checkbox" id="s-assist"> Flight assist (self-levelling wings)</label>
       <label class="check"><input type="checkbox" id="s-mouse"> Mouse flight (click the game to capture mouse)</label>
-      <p class="muted small">Quality changes apply the next time you start a mode.</p>
+      <p class="muted small">Graphics changes take effect when you press Apply. Ultra needs a strong graphics card.</p>
+      <div class="row end"><button class="primary" data-close>Done</button></div>
+    </div>
+  </div>
+
+  <!-- ===== replays ===== -->
+  <div id="modal-replays" class="modal hidden">
+    <div class="card narrow">
+      <h2>Replays</h2>
+      <p class="muted small">Press <kbd>G</kbd> while flying to record a flight. Keep up to three replays: save the latest flight into a slot, overwrite a slot, or delete it.</p>
+      <div id="rp-list" class="rp-list"></div>
       <div class="row end"><button class="primary" data-close>Done</button></div>
     </div>
   </div>
@@ -122,7 +145,7 @@
       <div class="stack">
         <button class="primary" data-act="resume">Resume</button>
         <button data-act="restart">Restart</button>
-        <button data-act="replay" id="p-replay">Watch recording</button>
+        <button data-act="replay" id="p-replay">Replays</button>
         <button data-act="controls">Controls</button>
         <button data-act="settings">Settings</button>
         <button data-act="menu">Main menu</button>

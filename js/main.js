@@ -4,12 +4,17 @@
    ========================================================================== */
 
 const Settings = {
-  data: { volume: 0.8, quality: 'med', units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
+  data: { volume: 0.8, quality: 'med', gfx: null, units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
   load() {
     try {
       const s = localStorage.getItem('afterburn.settings');
       if (s) Object.assign(this.data, JSON.parse(s));
     } catch (e) { /* storage may be blocked */ }
+    // per-setting graphics levels (older saves only had a preset name)
+    const idx = { low: 0, med: 1, high: 2, epic: 3, ultra: 4 };
+    this.data.gfx = Object.assign(gfxPreset(idx[this.data.quality] !== undefined ? idx[this.data.quality] : 1), this.data.gfx || {});
+    const m = /[?&]gfx=(low|med|high|epic|ultra)/.exec(location.search); // ?gfx=ultra forces a preset for this visit (handy for testing)
+    if (m) this.data.gfx = gfxPreset(idx[m[1]]);
   },
   save() {
     try { localStorage.setItem('afterburn.settings', JSON.stringify(this.data)); } catch (e) { /* ignore */ }
@@ -52,7 +57,7 @@ App.ensureAudio = function () {
 
 App.resize = function () {
   const w = window.innerWidth, h = window.innerHeight;
-  const dpr = Math.min(window.devicePixelRatio || 1, App.quality.pixelRatio);
+  const dpr = Math.max(Math.min(window.devicePixelRatio || 1, App.quality.pixelRatio), App.quality.ss || 0);
   App.w = w; App.h = h; App.dpr = dpr;
   if (App.renderer) {
     App.renderer.setPixelRatio(dpr);
@@ -66,15 +71,116 @@ App.resize = function () {
   App.hudCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 };
 
-App.recording = null; // the last flight recorded with G: {dt, n, d:[13 numbers per sample]}
+App.recording = null; // the latest flight recorded with G: {dt, n, d:[13 numbers per sample], kind, crash}
+App.replayRec = null; // the recording the Replay Lab is showing (latest or a saved slot)
+
+/* ---------- saved replays: three slots in the browser's storage ---------------------------------- */
+
+const REPLAY_SLOTS = 3;
+const ReplayStore = {
+  key: 'afterburn.replays',
+  slots: [null, null, null], // each: {kind, crash, n, dt, date, b64}
+  load() {
+    try {
+      const s = localStorage.getItem(this.key);
+      if (s) { const a = JSON.parse(s); for (let i = 0; i < REPLAY_SLOTS; i++) this.slots[i] = a[i] || null; }
+    } catch (e) { /* storage may be blocked */ }
+  },
+  persist() {
+    try { localStorage.setItem(this.key, JSON.stringify(this.slots)); return true; } catch (e) { return false; }
+  },
+  encode(rec) {
+    const f = new Float32Array(rec.d), u = new Uint8Array(f.buffer);
+    let str = '';
+    for (let i = 0; i < u.length; i += 0x8000) str += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+    return { kind: rec.kind || 'fighter', crash: rec.crash || null, n: rec.n, dt: rec.dt, date: Date.now(), b64: btoa(str) };
+  },
+  decode(slot) {
+    const str = atob(slot.b64), u = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) u[i] = str.charCodeAt(i);
+    return { dt: slot.dt, n: slot.n, d: new Float32Array(u.buffer), kind: slot.kind, crash: slot.crash };
+  },
+  save(i, rec) {
+    const old = this.slots[i];
+    this.slots[i] = this.encode(rec);
+    if (!this.persist()) {
+      // storage is full: the stored copy of the latest flight is the most expendable thing, so drop it and try once more
+      try { localStorage.removeItem(this.latestKey); } catch (e) { /* ignore */ }
+      if (!this.persist()) { this.slots[i] = old; return false; }
+    }
+    return true;
+  },
+  remove(i) { this.slots[i] = null; this.persist(); },
+  /** the latest flight is also kept in storage, so a page refresh does not lose it */
+  latestKey: 'afterburn.latest',
+  saveLatest(rec) {
+    try { localStorage.setItem(this.latestKey, JSON.stringify(this.encode(rec))); return true; } catch (e) { return false; }
+  },
+  loadLatest() {
+    try {
+      const s = localStorage.getItem(this.latestKey);
+      return s ? this.decode(JSON.parse(s)) : null;
+    } catch (e) { return null; }
+  },
+  any() { return this.slots.some(Boolean); },
+};
+
+function replayLabel(r) {
+  const kind = (r.kind && PLANES[r.kind]) ? PLANES[r.kind].name : 'Fighter jet';
+  return `${fmtTime((r.n - 1) * r.dt)}  \u00b7  ${kind}${r.crash ? '  \u00b7  ' + (r.crash.air ? 'shot down' : 'crashed') : ''}`;
+}
+
+App.renderReplays = function () {
+  const list = $id('rp-list');
+  list.innerHTML = '';
+  const row = (cls, title, sub, buttons) => {
+    const d = document.createElement('div');
+    d.className = 'rp-row ' + cls;
+    d.innerHTML = '<div><div class="t"></div><div class="s"></div></div><div class="b"></div>';
+    d.querySelector('.t').textContent = title;
+    d.querySelector('.s').textContent = sub;
+    const b = d.querySelector('.b');
+    for (const [label, fn, extra] of buttons) {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      if (extra) btn.className = extra;
+      btn.addEventListener('click', () => { if (App.audio && App.audio.ok) App.audio.click(); fn(); btn.blur(); });
+      b.appendChild(btn);
+    }
+    list.appendChild(d);
+  };
+  const latest = App.recording;
+  row('latest', 'Latest flight', latest ? replayLabel(latest) : 'nothing recorded yet \u2014 press G while flying',
+    latest ? [['Watch', () => { App.replayRec = latest; App.closeModals(); App.startMode('replay'); }, 'primary']] : []);
+  for (let i = 0; i < REPLAY_SLOTS; i++) {
+    const sl = ReplayStore.slots[i];
+    const btns = [];
+    if (sl) btns.push(['Watch', () => { App.replayRec = ReplayStore.decode(sl); App.closeModals(); App.startMode('replay'); }, 'primary']);
+    if (latest) {
+      btns.push([sl ? 'Overwrite with latest' : 'Save latest here', () => {
+        if (sl && !confirm(`Replace the replay in slot ${i + 1} with your latest flight?`)) return;
+        if (ReplayStore.save(i, latest)) App.toast(`Saved to slot ${i + 1}`);
+        else App.toast('Not enough browser storage to save this replay (delete one first)', 3600);
+        App.renderReplays(); App.refreshReplayUI();
+      }]);
+    }
+    if (sl) btns.push(['Delete', () => {
+      if (!confirm(`Delete the replay in slot ${i + 1}?`)) return;
+      ReplayStore.remove(i); App.toast(`Slot ${i + 1} deleted`); App.renderReplays(); App.refreshReplayUI();
+    }, 'danger']);
+    row('', `Slot ${i + 1}`, sl ? `${replayLabel(sl)}  \u00b7  ${new Date(sl.date).toLocaleString()}` : 'empty', btns);
+  }
+};
+
 App.refreshReplayUI = function () {
-  const r = App.recording;
-  for (const id of ['m-replay', 'p-replay']) { const el = $id(id); if (el) el.classList.toggle('dim', !r); }
+  const r = App.recording, any = !!r || ReplayStore.any();
+  for (const id of ['m-replay', 'p-replay']) { const el = $id(id); if (el) el.classList.toggle('dim', !any); }
   const pl = $id('m-plane');
   if (pl) pl.textContent = 'Free Flight aircraft: ' + (PLANES[Settings.data.plane] ? PLANES[Settings.data.plane].name : 'Fighter jet');
   const sub = $id('m-replay-sub');
-  if (sub) sub.textContent = r
-    ? `Your ${fmtTime((r.n - 1) * r.dt)} recording. Stand anywhere on the ground and hear it fly past.`
+  const saved = ReplayStore.slots.filter(Boolean).length;
+  if (sub) sub.textContent = any
+    ? `${r ? 'Your latest ' + fmtTime((r.n - 1) * r.dt) + ' flight' : 'Saved replays'}${saved ? ' \u00b7 ' + saved + ' of ' + REPLAY_SLOTS + ' slots used' : ''}. Watch it from anywhere on the ground.`
     : 'Press G while flying to record. Then watch it from anywhere on the ground, with Doppler sound.';
 };
 
@@ -139,7 +245,7 @@ App.openModal = function (which) {
 
 App.closeModals = function () {
   let any = false;
-  for (const id of ['modal-controls', 'modal-settings']) {
+  for (const id of ['modal-controls', 'modal-settings', 'modal-replays']) {
     const el = $id(id);
     if (!el.classList.contains('hidden')) { el.classList.add('hidden'); any = true; }
   }
@@ -148,11 +254,81 @@ App.closeModals = function () {
 
 /* ---------- settings UI ----------------------------------------------------------- */
 
+/* ---------- graphics settings: a preset plus a level for each individual setting ---------------------- */
+
+const GFX_UI = [
+  ['g-res', 'res', GFX_LEVELS],
+  ['g-shadows', 'shadows', ['Off', 'Medium', 'High', 'Epic', 'Ultra']],
+  ['g-terrain', 'terrain', GFX_LEVELS],
+  ['g-trees', 'trees', GFX_LEVELS],
+  ['g-clouds', 'clouds', GFX_LEVELS],
+  ['g-particles', 'particles', GFX_LEVELS],
+  ['g-crash', 'crash', GFX_LEVELS],
+  ['g-plane', 'plane', GFX_LEVELS],
+];
+const GFX_PRESET_NAMES = ['low', 'med', 'high', 'epic', 'ultra'];
+
+function readGfx() {
+  const g = {};
+  for (const [id, key] of GFX_UI) g[key] = parseInt($id(id).value, 10);
+  g.aa = $id('g-aa').checked;
+  return g;
+}
+
+function gfxSame(a, b) { return Object.keys(a).every((k) => a[k] === b[k]); }
+
+function presetNameOf(g) {
+  for (let i = 0; i < 5; i++) if (gfxSame(g, gfxPreset(i))) return GFX_PRESET_NAMES[i];
+  return 'custom';
+}
+
+function syncGfxUI() {
+  const d = Settings.data;
+  if (!$id('g-res').options.length) {
+    for (const [id, , names] of GFX_UI) {
+      const sel = $id(id);
+      names.forEach((n, i) => { const o = document.createElement('option'); o.value = i; o.textContent = n; sel.appendChild(o); });
+    }
+  }
+  for (const [id, key] of GFX_UI) $id(id).value = d.gfx[key];
+  $id('g-aa').checked = !!d.gfx.aa;
+  $id('s-quality').value = presetNameOf(d.gfx);
+  $id('s-apply').classList.add('hidden');
+}
+
+function bindGfx() {
+  const d = Settings.data;
+  const dirty = () => {
+    const g = readGfx();
+    $id('s-quality').value = presetNameOf(g);
+    $id('s-apply').classList.toggle('hidden', gfxSame(g, d.gfx));
+  };
+  $id('s-quality').addEventListener('change', () => {
+    const i = GFX_PRESET_NAMES.indexOf($id('s-quality').value);
+    if (i >= 0) {
+      const g = gfxPreset(i);
+      for (const [id, key] of GFX_UI) $id(id).value = g[key];
+      $id('g-aa').checked = g.aa;
+    }
+    dirty();
+    $id('s-quality').blur();
+  });
+  for (const [id] of GFX_UI) $id(id).addEventListener('change', () => { dirty(); $id(id).blur(); });
+  $id('g-aa').addEventListener('change', () => { dirty(); $id('g-aa').blur(); });
+  $id('s-apply').addEventListener('click', () => {
+    d.gfx = readGfx();
+    d.quality = presetNameOf(d.gfx);
+    Settings.save();
+    App.toast('Applying graphics settings...');
+    setTimeout(() => location.reload(), 350);
+  });
+}
+
 function syncSettingsUI() {
   const d = Settings.data;
   $id('s-volume').value = d.volume;
   $id('s-volume-o').textContent = Math.round(d.volume * 100) + '%';
-  $id('s-quality').value = d.quality;
+  syncGfxUI();
   $id('s-units').value = d.units;
   $id('s-invert').checked = d.invert;
   $id('s-assist').checked = d.assist;
@@ -167,15 +343,7 @@ function bindSettings() {
     if (App.audio && App.audio.ok) App.audio.setVolume(d.volume);
     Settings.save();
   });
-  $id('s-quality').addEventListener('change', () => {
-    const was = d.quality;
-    d.quality = $id('s-quality').value;
-    Settings.save();
-    if (was !== d.quality) {
-      App.toast('Applying graphics quality...');
-      setTimeout(() => location.reload(), 350);
-    }
-  });
+  bindGfx();
   $id('s-units').addEventListener('change', () => { d.units = $id('s-units').value; Settings.save(); });
   for (const [id, key] of [['s-invert', 'invert'], ['s-assist', 'assist'], ['s-mouse', 'mouse']]) {
     $id(id).addEventListener('change', () => { d[key] = $id(id).checked; Settings.save(); $id(id).blur(); });
@@ -267,7 +435,10 @@ function bindMenus() {
       case 'fly': App.startMode('dogfight'); break;
       case 'free': App.startMode('free'); break;
       case 'watch': App.startMode('watch'); break;
-      case 'replay': App.startMode('replay'); break;
+      case 'replay':
+        if (!App.recording && !ReplayStore.any()) App.toast('Nothing recorded yet \u2014 press G while flying to record', 3200);
+        else { App.renderReplays(); App.openModal('replays'); }
+        break;
       case 'plane':
         { const order = ['fighter', 'c17', 'b737', 'b747']; Settings.data.plane = order[(order.indexOf(Settings.data.plane) + 1) % order.length]; }
         Settings.save();
@@ -323,12 +494,12 @@ function frame(now) {
 
 function boot() {
   Settings.load();
-  App.quality = QUALITY[Settings.data.quality] || QUALITY.med;
+  App.quality = buildQuality(Settings.data.gfx);
   App.hudCtx = $id('hud').getContext('2d');
 
   let renderer;
   try {
-    renderer = new THREE.WebGLRenderer({ canvas: $id('gl'), antialias: true, powerPreference: 'high-performance' });
+    renderer = new THREE.WebGLRenderer({ canvas: $id('gl'), antialias: App.quality.aa, powerPreference: 'high-performance' });
   } catch (err) {
     $id('loading').innerHTML = '<p style="max-width:28em;text-align:center">WebGL is not available in this browser, so the 3D world cannot start. Try a recent Chrome, Edge or Firefox with hardware acceleration enabled.</p>';
     return;
@@ -353,6 +524,8 @@ function boot() {
   bindMenus();
   bindSettings();
 
+  ReplayStore.load();
+  App.recording = ReplayStore.loadLatest(); // your last flight survives a refresh
   App.refreshReplayUI();
   App.ready = true;
   App.startMode('menu');

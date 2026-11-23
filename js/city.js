@@ -54,6 +54,11 @@ function buildCity(scene) {
 
   const pos = [], nor = [], uv = [], col = [], idx = [];
   const boxes = new Map(); // block key -> [{x, z, hw, hd, top}]
+  // culling: the city is split into districts of 4x4 blocks; each district's triangles form one draw group with its own material,
+  // and districts that are outside the view (plus a margin for their shadows) are switched off every frame
+  const TILE = 4, tx = Math.ceil(nx / TILE), tz = Math.ceil(nz / TILE), TOWER_TILE = tx * tz;
+  let curTile = 0;
+  const tileIdx = [];
   const tint = new THREE.Color();
   let vN = 0;
 
@@ -78,7 +83,8 @@ function buildCity(scene) {
       col.push(tint.r, tint.g, tint.b);
     }
     const ix = geo.index.array;
-    for (let i = 0; i < ix.length; i++) idx.push(ix[i] + vN);
+    const arr = tileIdx[curTile] || (tileIdx[curTile] = []);
+    for (let i = 0; i < ix.length; i++) arr.push(ix[i] + vN);
     vN += cnt;
   };
 
@@ -117,8 +123,9 @@ function buildCity(scene) {
         core = Math.max(core, k * Math.exp(-(dd * dd) / 0.03));
       }
       const key = i * nz + j;
+      curTile = Math.floor(i / TILE) * tz + Math.floor(j / TILE);
       const inner = P - ROAD; // buildable block width
-      if (d > 0.3 && rnd() < 0.08) { parks.push([bx, bz]); continue; }
+      if (d > 0.3 && rnd() < 0.08) { parks.push([bx, bz, curTile]); continue; }
       const nLots = core > 0.3 || d < 0.45 ? (rnd() < 0.35 ? 1 : 2) : (d < 0.75 && rnd() < 0.4 ? 2 : 3);
       const lot = inner / nLots;
       for (let a = 0; a < nLots; a++) {
@@ -148,7 +155,8 @@ function buildCity(scene) {
   }
 
   // parks: green plates (a thin box so the geometry matches the others)
-  for (const [px, pz] of parks) {
+  for (const [px, pz, pt] of parks) {
+    curTile = pt;
     const pg = new THREE.BoxGeometry(P - ROAD - 8, 1.6, P - ROAD - 8);
     pg.translate(px, y0 + 0.8, pz);
     addGeo(pg, 0x5f8f48, 'plain');
@@ -156,6 +164,7 @@ function buildCity(scene) {
   }
 
   // a TV tower at the heart of downtown
+  curTile = TOWER_TILE; // (always drawn)
   const tower = (r0, r1, h, y, c) => {
     const g = new THREE.CylinderGeometry(r1, r0, h, 10, 1);
     g.translate(C.x + 4, y0 + y, C.z + 4);
@@ -171,9 +180,27 @@ function buildCity(scene) {
   geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
-  geo.setIndex(new THREE.BufferAttribute(vN > 65535 ? new Uint32Array(idx) : new Uint16Array(idx), 1));
+  // one index buffer, ordered by district, with a draw group per district
+  const finalIdx = [];
+  const baseMat = new THREE.MeshLambertMaterial({ map: tex.facade, vertexColors: true });
+  const tileMats = [];
+  for (let t = 0; t <= TOWER_TILE; t++) {
+    tileMats.push(baseMat.clone());
+    const arr = tileIdx[t];
+    if (!arr || !arr.length) continue;
+    geo.addGroup(finalIdx.length, arr.length, t);
+    for (let i = 0; i < arr.length; i++) finalIdx.push(arr[i]);
+  }
+  geo.setIndex(new THREE.BufferAttribute(vN > 65535 ? new Uint32Array(finalIdx) : new Uint16Array(finalIdx), 1));
   geo.computeBoundingSphere();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: tex.facade, vertexColors: true }));
+  const tileSph = [];
+  for (let ti = 0; ti < tx; ti++) {
+    for (let tj = 0; tj < tz; tj++) {
+      const cx = x0 + (ti + 0.5) * TILE * P, cz = z0 + (tj + 0.5) * TILE * P;
+      tileSph.push(new THREE.Sphere(new THREE.Vector3(cx, y0 + 180, cz), Math.sqrt(2 * (TILE * P / 2) * (TILE * P / 2) + 200 * 200) + 480));
+    }
+  }
+  const mesh = new THREE.Mesh(geo, tileMats);
   mesh.frustumCulled = false;
   group.add(mesh);
 
@@ -234,6 +261,18 @@ function buildCity(scene) {
 
   return {
     group, mesh, buildings, ground: gm, facadeTex: tex.facade,
+    /** switch off the districts outside the view frustum (with a margin so shadows from just off-screen towers still fall into view) */
+    cull(frustum) {
+      let shown = 0;
+      for (let t = 0; t < tileSph.length; t++) {
+        const on = frustum.intersectsSphere(tileSph[t]);
+        tileMats[t].visible = on;
+        if (on) shown++;
+      }
+      this.districtsShown = shown;
+      return shown;
+    },
+    districts: tileSph.length,
     /** rebuild every destroyed building (a new game) */
     reset() {
       if (!pending.length && !collapsing.length && !buildings.some((b) => b.state)) return;
@@ -263,7 +302,7 @@ function buildCity(scene) {
         if (Math.random() < chance) hit.push([d, bl]);
       }
       hit.sort((a, b) => a[0] - b[0]);
-      for (const [d, bl] of hit.slice(0, 80)) { bl.state = 3; bl.imp = { x: cx, z: cz, d, R, es }; pending.push({ bl, t: d / 260 + Math.random() * 0.45 }); }
+      for (const [d, bl] of hit.slice(0, CRASH_Q.blast[crashLevel()])) { bl.state = 3; bl.imp = { x: cx, z: cz, d, R, es }; pending.push({ bl, t: d / 260 + Math.random() * 0.45 }); }
     },
     update(dt) {
       for (let i = pending.length - 1; i >= 0; i--) {

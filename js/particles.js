@@ -175,7 +175,7 @@ class Effects {
     this._c1 = [0, 0, 0, 0];
     this.sims = []; // running fireball simulations
     this.ground = null; // (x, z) => ground height; set once the world exists
-    this.budget = quality.particles / 4500; // scales how many gas parcels a fireball uses
+    this.budget = clamp(quality.particles / 4500, 0.5, 2.2); // scales how many gas parcels a fireball uses
   }
 
   update(dt, camera, h) {

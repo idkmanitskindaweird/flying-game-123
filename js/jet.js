@@ -175,7 +175,7 @@ function buildJetMesh(palName) {
     [0.0, -8.2], [0.5, -8.2], [0.72, -7.6], [0.92, -6.0], [1.04, -3.2], [1.08, 0.0],
     [1.03, 2.4], [0.88, 4.4], [0.64, 5.9], [0.36, 7.2], [0.0, 8.5],
   ].map((p) => new THREE.Vector2(p[0], p[1]));
-  const fus = new THREE.LatheGeometry(prof, 16);
+  const fus = new THREE.LatheGeometry(prof, gfxLod(16));
   fus.rotateX(-PI / 2);
   fus.scale(1, 0.86, 1);
   parts.push(twoTone(fus, pal.body, pal.belly));
@@ -211,7 +211,7 @@ function buildJetMesh(palName) {
   parts.push(intake, mirroredCopy(paintGeometry(intake.clone(), 0x3a3f46)));
 
   // engine nozzle
-  const noz = new THREE.CylinderGeometry(0.66, 0.52, 1.6, 14, 1, true);
+  const noz = new THREE.CylinderGeometry(0.66, 0.52, 1.6, gfxLod(14), 1, true);
   noz.rotateX(PI / 2);
   noz.translate(0, 0, 8.6);
   paintGeometry(noz, 0x2b2d31);
@@ -238,7 +238,7 @@ function buildJetMesh(palName) {
   group.add(body);
 
   // canopy
-  const canopyGeo = new THREE.SphereGeometry(1, 14, 10);
+  const canopyGeo = new THREE.SphereGeometry(1, gfxLod(14), gfxLod(10));
   canopyGeo.scale(0.6, 0.5, 2.5);
   canopyGeo.translate(0, 0.62, -3.1);
   const canopy = new THREE.Mesh(

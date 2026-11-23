@@ -543,6 +543,11 @@ class AudioEngine {
   /** An aircraft crash: explosion, tearing metal, a long scrape, and fuel going up. size ~1 (fighter) .. 3 (jumbo) */
   crash(rel, size, water) {
     if (!this.ok) return;
+    // make sure nothing can swallow the crash: wake a suspended context, and undo any leftover fade-out of the effects bus
+    this.resume();
+    const t0 = this.ctx.currentTime;
+    if (this.sfx.gain.value < 0.85) { this.sfx.gain.cancelScheduledValues(t0); this.sfx.gain.setValueAtTime(0.9, t0); }
+    if (this.boomBus && this.boomBus.gain.value < 0.95) { this.boomBus.gain.cancelScheduledValues(t0); this.boomBus.gain.setValueAtTime(1, t0); }
     const s = clamp(size || 1, 0.6, 3);
     if (water) {
       this.noiseBurst({ type: 'pink', dur: 1.4, gain: 1.4, f0: 2500, f1: 300, q: 0.6, filt: 'lowpass', attack: 0.01, rel });
