@@ -23,6 +23,7 @@ class ParticleSystem {
     this.c1 = new Float32Array(max * 4);
     this.drag = new Float32Array(max);
     this.buoy = new Float32Array(max);
+    this.ext = new Uint8Array(max); // 1 = driven from outside (a fireball simulation writes these particles itself)
 
     const geo = new THREE.BufferGeometry();
     this.posAttr = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
@@ -70,9 +71,36 @@ class ParticleSystem {
   }
 
   /** p,v: {x,y,z}; c0,c1: [r,g,b,a] */
+  /** reserve one particle for an external simulation; returns its index or -1 */
+  alloc() {
+    for (let n = 0; n < this.max; n++) {
+      const i = (this.next + n) % this.max;
+      if (this.ext[i]) continue;
+      this.next = (i + 1) % this.max;
+      if (i + 1 > this.hi) this.hi = i + 1;
+      this.ext[i] = 1;
+      this.life[i] = 1e9;
+      this.age[i] = 0;
+      this.drag[i] = 0; this.buoy[i] = 0;
+      this.vel[i * 3] = this.vel[i * 3 + 1] = this.vel[i * 3 + 2] = 0;
+      this.siz[i] = 0;
+      this.col[i * 4 + 3] = 0;
+      return i;
+    }
+    return -1;
+  }
+
+  release(i) {
+    this.ext[i] = 0;
+    this.life[i] = 0;
+    this.siz[i] = 0;
+    this.col[i * 4 + 3] = 0;
+  }
+
   emit(p, v, life, size0, size1, c0, c1, drag, buoy) {
-    const i = this.next;
-    this.next = (this.next + 1) % this.max;
+    let i = this.next;
+    for (let n = 0; n < this.max && this.ext[i]; n++) i = (i + 1) % this.max; // never overwrite a simulated particle
+    this.next = (i + 1) % this.max;
     if (i + 1 > this.hi) this.hi = i + 1;
     const i3 = i * 3, i4 = i * 4;
     this.pos[i3] = p.x; this.pos[i3 + 1] = p.y; this.pos[i3 + 2] = p.z;
@@ -97,6 +125,7 @@ class ParticleSystem {
     const hi = this.hi;
     let alive = 0;
     for (let i = 0; i < hi; i++) {
+      if (this.ext[i]) { alive++; continue; } // simulated from outside: leave it alone
       const life = this.life[i];
       if (life <= 0) continue;
       const age = (this.age[i] += dt);
@@ -126,6 +155,7 @@ class ParticleSystem {
   }
 
   clear() {
+    this.ext.fill(0);
     this.life.fill(0);
     this.siz.fill(0);
     this.col.fill(0);
@@ -143,14 +173,20 @@ class Effects {
     this._v = { x: 0, y: 0, z: 0 };
     this._c0 = [0, 0, 0, 0];
     this._c1 = [0, 0, 0, 0];
+    this.sims = []; // running fireball simulations
+    this.ground = null; // (x, z) => ground height; set once the world exists
+    this.budget = quality.particles / 4500; // scales how many gas parcels a fireball uses
   }
 
   update(dt, camera, h) {
+    for (let i = this.sims.length - 1; i >= 0; i--) if (!this.sims[i].update(dt)) this.sims.splice(i, 1);
     this.smoke.update(dt, camera, h);
     this.fire.update(dt, camera, h);
   }
 
   clear() {
+    for (const s of this.sims) s.kill();
+    this.sims.length = 0;
     this.smoke.clear();
     this.fire.clear();
   }
@@ -173,6 +209,27 @@ class Effects {
     c0[0] = r; c0[1] = g; c0[2] = b; c0[3] = a;
     c1[0] = r * 0.55; c1[1] = g * 0.25; c1[2] = b * 0.1; c1[3] = 0;
     this.fire.emit(p, v, life, s0, s1, c0, c1, drag === undefined ? 1.2 : drag, 0);
+  }
+
+  /** glowing blob that can also rise (buoy) - used for fireballs */
+  fireblob(x, y, z, vx, vy, vz, life, s0, s1, r, g, b, a, drag, buoy) {
+    const p = this._p, v = this._v;
+    p.x = x; p.y = y; p.z = z; v.x = vx; v.y = vy; v.z = vz;
+    const c0 = this._c0, c1 = this._c1;
+    c0[0] = r; c0[1] = g; c0[2] = b; c0[3] = a;
+    c1[0] = r * 0.5; c1[1] = g * 0.2; c1[2] = b * 0.08; c1[3] = 0;
+    this.fire.emit(p, v, life, s0, s1, c0, c1, drag, buoy || 0);
+  }
+
+  /**
+   * A simulated fireball (see fireball.js): scale ~1.7 for a fighter, 3-6 for an airliner. A bright flash goes off first; the hot
+   * gas then expands, rises, rolls over itself, cools through the colours of fire and darkens into smoke.
+   */
+  fireball(x, y, z, scale, big) {
+    scale = scale || 1;
+    const R = 20 * scale;
+    this.glow(x, y + R * 0.3, z, 0, 0, 0, 0.28, R * 3, R * 8, 1, 0.95, 0.8, 1, 0); // the flash
+    this.sims.push(new FireballSim(this, x, y, z, scale, big));
   }
 
   explosion(x, y, z, scale, vx, vy, vz) {

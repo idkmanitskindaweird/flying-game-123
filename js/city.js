@@ -131,7 +131,7 @@ function buildCity(scene) {
           else H = 22 + Math.pow(rnd(), 1.5) * 50 + core * Math.pow(rnd(), 0.8) * 280;
           const colr = (core > 0.35 && rnd() < 0.55) ? FACADES[5 + Math.floor(rnd() * 3)] : FACADES[Math.floor(rnd() * 5)];
           const roof = ROOFS[Math.floor(rnd() * ROOFS.length)];
-          const bl = { x: lx, z: lz, hw: w / 2, hd: dp / 2, H, ranges: [], boxes: [], state: 0, p: 0, dur: 3, shx: 0, shz: 0 };
+          const bl = { x: lx, z: lz, hw: w / 2, hd: dp / 2, H, ranges: [], boxes: [], state: 0, color: colr, roof, levels: null, times: null, next: 0, t: 0, cut: 0, imp: null };
           const take = (r) => { bl.ranges.push([r.v0, r.n]); if (r.box) bl.boxes.push(r.box); };
           take(addBox(lx, lz, w, dp, y0, H, colr, roof, key));
           if (H > 70 && rnd() < 0.7) { // stepped top
@@ -177,21 +177,54 @@ function buildCity(scene) {
   mesh.frustumCulled = false;
   group.add(mesh);
 
-  /* ----- destruction: buildings in the blast collapse, one after another as the shock wave reaches them ----- */
-  const posAttr = geo.attributes.position, colAttr = geo.attributes.color;
-  const posArr = posAttr.array, colArr = colAttr.array, basePos = new Float32Array(posArr);
-  const baseCol = new Float32Array(colArr);
+  /* ----- destruction: buildings in the blast break apart, nearest first, one slab at a time from the top down ----- */
+  const posAttr = geo.attributes.position, colAttr = geo.attributes.color, uvAttr = geo.attributes.uv;
+  const posArr = posAttr.array, colArr = colAttr.array, uvArr = uvAttr.array;
+  const basePos = new Float32Array(posArr), baseCol = new Float32Array(colArr), baseUV = new Float32Array(uvArr);
+  // the vertical extent of every box (so a building can be cut off at any height)
+  for (const bl of buildings) {
+    for (const r of bl.ranges) {
+      let lo = 1e9, hi = -1e9;
+      for (let i = r[0]; i < r[0] + r[1]; i++) { const y = basePos[i * 3 + 1]; if (y < lo) lo = y; if (y > hi) hi = y; }
+      r[2] = lo; r[3] = hi;
+    }
+  }
   const pending = [], collapsing = [];
   let blastFx = null;
-  const ease = (p) => p * p * (3 - 2 * p);
+
+  /** cut a building off at height cutY: everything above is gone (it has become flying chunks) */
+  const applyCut = (bl, cutY) => {
+    for (const [v0, n, lo, hi] of bl.ranges) {
+      if (lo >= cutY - 0.01) { // this whole box (a stepped tier, a rooftop plant) is gone: hide it underground
+        for (let i = v0; i < v0 + n; i++) posArr[i * 3 + 1] = y0 - 80;
+        continue;
+      }
+      if (hi <= cutY) continue;
+      const frac = (cutY - lo) / (hi - lo);
+      for (let i = v0; i < v0 + n; i++) {
+        if (basePos[i * 3 + 1] > cutY) {
+          posArr[i * 3 + 1] = cutY;
+          uvArr[i * 2 + 1] = baseUV[i * 2 + 1] * frac; // the window pattern shortens with the wall instead of stretching
+        }
+      }
+    }
+    posAttr.needsUpdate = true;
+    uvAttr.needsUpdate = true;
+  };
 
   const startCollapse = (bl) => {
     bl.state = 1;
-    bl.p = 0;
-    bl.dur = clamp(1.8 + bl.H / 40, 2.2, 7);
-    bl.shx = (Math.random() - 0.5) * 0.5;
-    bl.shz = (Math.random() - 0.5) * 0.5;
-    for (const [v0, n] of bl.ranges) for (let i = v0; i < v0 + n; i++) { // scorched: the facade goes dark
+    const H = bl.H, stub = clamp(H * 0.07, 2.5, 9);
+    const nS = H < 40 ? 1 : clamp(Math.round(H / 26), 2, 12); // slabs, top first
+    const step = (H - stub) / nS;
+    const dur = nS === 1 ? 0 : 0.5 + nS * 0.22;
+    bl.levels = []; bl.times = [];
+    for (let i = 0; i < nS; i++) {
+      bl.levels.push(H - step * (i + 1));
+      bl.times.push(nS === 1 ? 0 : (i / (nS - 1)) * dur + Math.random() * 0.12);
+    }
+    bl.next = 0; bl.t = 0; bl.cut = H;
+    for (const [v0, n] of bl.ranges) for (let i = v0; i < v0 + n; i++) { // what is left standing is scorched
       colArr[i * 3] *= 0.34; colArr[i * 3 + 1] *= 0.32; colArr[i * 3 + 2] *= 0.3;
     }
     colAttr.needsUpdate = true;
@@ -200,7 +233,7 @@ function buildCity(scene) {
   };
 
   return {
-    group, mesh, buildings, ground: gm,
+    group, mesh, buildings, ground: gm, facadeTex: tex.facade,
     /** rebuild every destroyed building (a new game) */
     reset() {
       if (!pending.length && !collapsing.length && !buildings.some((b) => b.state)) return;
@@ -208,8 +241,10 @@ function buildCity(scene) {
       collapsing.length = 0;
       posArr.set(basePos);
       colArr.set(baseCol);
+      uvArr.set(baseUV);
+      uvAttr.needsUpdate = true;
       for (const bl of buildings) {
-        bl.state = 0;
+        bl.state = 0; bl.imp = null;
         for (const b of bl.boxes) { b.hw = b.hw0; b.hd = b.hd0; b.top = b.top0; }
       }
       posAttr.needsUpdate = true;
@@ -228,7 +263,7 @@ function buildCity(scene) {
         if (Math.random() < chance) hit.push([d, bl]);
       }
       hit.sort((a, b) => a[0] - b[0]);
-      for (const [d, bl] of hit.slice(0, 80)) { bl.state = 3; pending.push({ bl, t: d / 260 + Math.random() * 0.45 }); }
+      for (const [d, bl] of hit.slice(0, 80)) { bl.state = 3; bl.imp = { x: cx, z: cz, d, R, es }; pending.push({ bl, t: d / 260 + Math.random() * 0.45 }); }
     },
     update(dt) {
       for (let i = pending.length - 1; i >= 0; i--) {
@@ -239,27 +274,20 @@ function buildCity(scene) {
       if (!collapsing.length) return;
       for (let c = collapsing.length - 1; c >= 0; c--) {
         const bl = collapsing[c];
-        bl.p = Math.min(1, bl.p + dt / bl.dur);
-        const k = ease(bl.p), f = 1 - 0.9 * k;
-        const lean = bl.shx * k * 0.5, leanZ = bl.shz * k * 0.5;
-        for (const [v0, n] of bl.ranges) {
-          for (let i = v0; i < v0 + n; i++) {
-            const ox = basePos[i * 3], oy = basePos[i * 3 + 1], oz = basePos[i * 3 + 2];
-            const h = oy - y0;
-            const sp = 1 + 0.2 * k * (h / (bl.H + 1)); // the upper floors spread as they pancake
-            posArr[i * 3] = bl.x + (ox - bl.x) * sp + lean * h;
-            posArr[i * 3 + 1] = y0 + h * f;
-            posArr[i * 3 + 2] = bl.z + (oz - bl.z) * sp + leanZ * h;
-          }
+        bl.t += dt;
+        while (bl.next < bl.levels.length && bl.t >= bl.times[bl.next]) {
+          const newCut = bl.levels[bl.next], oldCut = bl.cut;
+          if (blastFx) blastFx.slab(bl, y0 + newCut, y0 + oldCut, y0, bl.next === 0);
+          bl.cut = newCut;
+          applyCut(bl, y0 + newCut);
+          bl.boxes.forEach((b, k) => {
+            b.top = Math.min(b.top0, y0 + newCut); // the collision follows the cut
+            if (bl.ranges[k][2] >= y0 + newCut - 0.01) b.hw = b.hd = -9;
+          });
+          bl.next++;
         }
-        for (const b of bl.boxes) b.top = y0 + (b.top0 - y0) * f; // collision follows the falling roof
-        if (bl.p >= 1) {
-          collapsing.splice(c, 1);
-          bl.state = 2;
-          bl.boxes.forEach((b, k2) => { if (k2 > 0) b.hw = b.hd = -9; }); // tiers and rooftop plants are gone; the base stays as a rubble heap
-        }
+        if (bl.next >= bl.levels.length) { collapsing.splice(c, 1); bl.state = 2; }
       }
-      posAttr.needsUpdate = true;
     },
     /**
      * Collision of a sphere (centre x,y,z, radius r) with the buildings: returns {nx,ny,nz,pen} (push-out direction and depth)

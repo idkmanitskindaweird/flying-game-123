@@ -342,6 +342,7 @@ function boot() {
   App.camera.rotation.order = 'YXZ';
   App.world = new World(App.scene, App.quality);
   App.fx = new Effects(App.scene, App.quality);
+  App.fx.ground = (x, z) => App.world.groundTop(x, z);
   App.resize();
 
   App.modes.watch = new WatchMode(App);

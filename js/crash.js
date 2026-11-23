@@ -17,6 +17,28 @@ const _kq = new THREE.Quaternion();
 const _kv = new THREE.Vector3();
 const _kw = new THREE.Vector3();
 
+/**
+ * Turn a clean box / cylinder into a jagged broken lump: every vertex is pushed by a pseudo-random amount (a hash of its position,
+ * so vertices that share a spot move together and the surface stays closed), then the normals are recomputed.
+ * amt is the largest push as a fraction of the piece's size per axis.
+ */
+function jaggedGeometry(geo, amt) {
+  geo.computeBoundingBox();
+  const sz = geo.boundingBox.getSize(new THREE.Vector3());
+  const p = geo.attributes.position, k = Math.random() * 100;
+  const h = (x, y, z, o) => { const n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + (k + o) * 19.19) * 43758.5453; return n - Math.floor(n); };
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const rx = Math.round(x * 40), ry = Math.round(y * 40), rz = Math.round(z * 40);
+    p.setXYZ(i, x + (h(rx, ry, rz, 1) - 0.5) * 2 * amt * sz.x, y + (h(rx, ry, rz, 2) - 0.5) * 2 * amt * sz.y, z + (h(rx, ry, rz, 3) - 0.5) * 2 * amt * sz.z);
+  }
+  p.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+const _ri = (a, b) => a + Math.floor(Math.random() * (b - a + 1)); // random integer in [a, b]
+
 class CrashFX {
   constructor(app) {
     this.app = app;
@@ -130,8 +152,16 @@ class CrashFX {
 
   makeMesh(part, sc) {
     const [sx, sy, sz] = part.size;
-    const geo = part.round ? new THREE.CylinderGeometry(sx / 2, sx / 2 * 0.9, sz, 10) : new THREE.BoxGeometry(sx, sy, sz);
-    if (part.round) { if (part.axis === 'x') geo.rotateZ(PI / 2); else geo.rotateX(PI / 2); }
+    // a random number of segments gives every piece a different number of vertices, and the jitter makes the pieces jagged
+    let geo;
+    if (part.round) {
+      geo = new THREE.CylinderGeometry(sx / 2, sx / 2 * 0.9, sz, part.wheel ? 12 : _ri(5, 12), _ri(1, 2));
+      if (part.axis === 'x') geo.rotateZ(PI / 2); else geo.rotateX(PI / 2);
+      jaggedGeometry(geo, part.wheel ? 0.04 : 0.1);
+    } else {
+      geo = new THREE.BoxGeometry(sx, sy, sz, _ri(1, part.shard ? 3 : 2), _ri(1, part.shard ? 2 : 2), _ri(1, part.shard ? 3 : 2));
+      jaggedGeometry(geo, part.glass ? 0.06 : part.shard ? 0.32 : part.cargo ? 0.08 : 0.16);
+    }
     const mat = part.glass
       ? new THREE.MeshPhongMaterial({ color: part.color, specular: 0xaad0ff, shininess: 120 })
       : new THREE.MeshLambertMaterial({ color: part.color });
@@ -162,6 +192,14 @@ class CrashFX {
       app.fx.explosion(cx, 3, cz, es * 0.55, 0, 0, 0);
     } else {
       app.fx.explosion(cx, cy, cz, es, vel.x * 0.25, vel.y * 0.15, vel.z * 0.25);
+      // the fireball: a big aircraft (airliner, C-17) gets a much bigger one, with a second eruption
+      const big = !!jet.spec, fb = big ? clamp(es * 1.35, 3.2, 6.2) : 1.7;
+      app.fx.fireball(cx, cy, cz, fb, big);
+      w.flash(cx, cy, cz, big ? fb * 0.7 : 1);
+      if (big) {
+        this.timers.push({ t: 0.35, fn: () => { app.fx.fireball(cx + rand(-14, 14) * fb, cy + 2, cz + rand(-14, 14) * fb, fb * 0.65, false); w.flash(cx, cy, cz, fb * 0.5); } });
+        this.timers.push({ t: 0.8, fn: () => { app.fx.fireball(cx + rand(-20, 20) * fb, cy + 2, cz + rand(-20, 20) * fb, fb * 0.5, false); } });
+      }
       if (!air) this.dustRing(cx, gh, cz, es, vel);
     }
 
@@ -287,16 +325,6 @@ class CrashFX {
     for (let i = 0; i < 16; i++) {
       fx.glow(cx + rand(-1, 1) * bl.hw, y0 + Math.random() * H, cz + rand(-1, 1) * bl.hd, rand(-18, 18), rand(-4, 12), rand(-18, 18), rand(0.5, 1.1), 1.6, 0.6, 0.75, 0.92, 1, 0.85, 0.5);
     }
-    // chunks of concrete, steel and curtain wall thrown out
-    if (this.chunks.length < 520) {
-      const nd = clamp(Math.round(2 + H / 22), 2, 9);
-      const cols = [0x8d8b86, 0x7c7a76, 0x9b9791, 0x6f8fa6, 0x55585c];
-      for (let i = 0; i < nd; i++) {
-        const sz = rand(1.2, 4.2);
-        const a = rand(0, TAU), sp = rand(10, 36);
-        this.addDebris(cx + rand(-1, 1) * bl.hw, y0 + H * rand(0.25, 1), cz + rand(-1, 1) * bl.hd, Math.cos(a) * sp, rand(5, 28), Math.sin(a) * sp, sz, cols[i % cols.length], rand(1.5, 5));
-      }
-    }
     // some of them burn
     if (Math.random() < 0.4) this.sites.push({ x: cx, y: y0 + H * 0.12, z: cz, t: 0, life: rand(18, 38), size: clamp(0.8 + H / 120, 0.8, 2.4), acc: 0 });
     // sound (limited so a whole district coming down is a roar, not a thousand voices)
@@ -305,6 +333,75 @@ class CrashFX {
       const a = app.audio, cp = this.listener || app.camera.position;
       if (a && a.ok && a.collapse) { const rel = { x: cx - cp.x, y: y0 + H * 0.4 - cp.y, z: cz - cp.z }; this.after(() => a.collapse(rel, clamp(H / 80, 0.4, 2)), cx, y0, cz); }
     }
+  }
+
+  /** one facade-textured block (a piece of a building) */
+  makeFacadeMesh(sx, sy, sz, color) {
+    const geo = new THREE.BoxGeometry(sx, sy, sz, _ri(1, 3), _ri(1, 3), _ri(1, 3)); // random segment counts: random vertex counts
+    const uv = geo.attributes.uv, nr = geo.attributes.normal;
+    const cz = Math.max(1, Math.round(sz / 6.2)), cx = Math.max(1, Math.round(sx / 6.2)), cv = Math.max(1, Math.round(sy / 3.6));
+    for (let i = 0; i < uv.count; i++) {
+      const ax = Math.abs(nr.getX(i)), ay = Math.abs(nr.getY(i));
+      if (ay > 0.5) uv.setXY(i, 0.04, 0.04); // top and bottom: bare concrete
+      else if (ax > 0.5) uv.setXY(i, uv.getX(i) * cz, uv.getY(i) * cv);
+      else uv.setXY(i, uv.getX(i) * cx, uv.getY(i) * cv);
+    }
+    jaggedGeometry(geo, rand(0.1, 0.26)); // broken, uneven edges
+    const mat = new THREE.MeshLambertMaterial({ map: this.app.world.city.facadeTex, color });
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = m.receiveShadow = true;
+    this.group.add(m);
+    return m;
+  }
+
+  /**
+   * A slab of a building, from yBot to yTop, breaks off: the floors fracture into blocks (still showing windows) that are thrown
+   * away from the blast, tumble, bounce off the neighbouring buildings and the street, and pile up as rubble.
+   */
+  slab(bl, yBot, yTop, y0, first) {
+    const app = this.app, fx = app.fx;
+    const hh = yTop - yBot;
+    if (hh < 0.5) return;
+    const mid = (yBot + yTop) / 2;
+    let bx = bl.x, bz = bl.z, hw = bl.hw0 || bl.hw, hd = bl.hd0 || bl.hd;
+    bl.boxes.forEach((b, k) => { const r = bl.ranges[k]; if (mid >= r[2] && mid <= r[3]) { bx = b.x; bz = b.z; hw = b.hw0; hd = b.hd0; } });
+    const imp = bl.imp;
+    let ix = 0, iz = 0, k = 0.4;
+    if (imp) { ix = bl.x - imp.x; iz = bl.z - imp.z; const il = Math.hypot(ix, iz) || 1; ix /= il; iz /= il; k = clamp(1 - imp.d / imp.R, 0.15, 1); }
+    const cols = clamp(Math.round(hw * 2 / 8), 1, 4), rows = clamp(Math.round(hd * 2 / 8), 1, 4), lays = hh > 18 ? 2 : 1;
+    const sx = hw * 2 / cols, sz = hd * 2 / rows, sy = hh / lays;
+    if (this.chunks.length < 1400) {
+      const tone = new THREE.Color(bl.color).multiplyScalar(rand(0.55, 0.85)); // already blackened by the blast
+      for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) for (let l = 0; l < lays; l++) {
+        const px = bx - hw + (c + 0.5) * sx, pz = bz - hd + (r + 0.5) * sz, py = yBot + (l + 0.5) * sy;
+        const nSub = Math.random() < 0.35 ? 2 : 1; // some blocks have already cracked in two
+        for (let q = 0; q < nSub; q++) {
+          const piece = Math.random() < 0.45 ? rand(0.4, 0.7) : rand(0.8, 0.98); // many blocks are only a broken part of the cell
+          const ssy = sy * piece / nSub;
+          const mesh = this.makeFacadeMesh(sx * piece, ssy, sz * piece, tone);
+          mesh.position.set(px + rand(-0.1, 0.1) * sx, py + (nSub === 2 ? (q - 0.5) * sy * 0.5 : 0), pz + rand(-0.1, 0.1) * sz);
+          mesh.quaternion.setFromEuler(new THREE.Euler(rand(-0.12, 0.12), rand(0, TAU), rand(-0.12, 0.12)));
+          const ox = px - bl.x, oz = pz - bl.z, ol = Math.hypot(ox, oz) || 1;
+          const radius = Math.max(0.5, Math.max(sx, ssy, sz) * piece * 0.36);
+          const sp = rand(0.6, 1.4);
+          this.chunks.push({
+            mesh, r: radius, s: radius * 0.3 + 0.4,
+            vel: new THREE.Vector3(ix * rand(8, 34) * k * sp + (ox / ol) * rand(3, 15), rand(0, 12) + (py - y0) * 0.02, iz * rand(8, 34) * k * sp + (oz / ol) * rand(3, 15)),
+            ang: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(rand(0.8, 4)),
+            rest: false, age: 0, burn: Math.random() < 0.3 ? rand(2, 7) : 0, acc: 0, sunk: 0, fade: 1, water: false, fric: 1.7, interval: 0.2,
+          });
+        }
+      }
+    }
+    // dust, glass and a flash where the floors let go
+    const n = clamp(5 + Math.round(hh / 5), 5, 14);
+    for (let i = 0; i < n; i++) {
+      fx.puff(bx + rand(-1, 1) * hw, yBot + Math.random() * hh, bz + rand(-1, 1) * hd, rand(-12, 12) + ix * 8, rand(-3, 8), rand(-12, 12) + iz * 8,
+        rand(4, 8), rand(8, 14), rand(30, 60), rand(0.5, 0.68), rand(0.5, 0.75), 0.9, rand(0.5, 1.8));
+    }
+    for (let i = 0; i < 10; i++) fx.glow(bx + rand(-1, 1) * hw, yBot + Math.random() * hh, bz + rand(-1, 1) * hd, rand(-16, 16), rand(-3, 10), rand(-16, 16), rand(0.5, 1.0), 1.5, 0.6, 0.75, 0.92, 1, 0.85, 0.5);
+    if (first) fx.explosion(bx, mid, bz, clamp(bl.H / 140, 0.25, 1.1), ix * 6, 0, iz * 6);
+    if (this.thudT <= 0) { this.thudT = 0.1; this.noise(bx, mid, bz, 'thud', clamp(hh / 14, 0.5, 2)); }
   }
 
   /** one tumbling lump of debris (concrete, glass, steel) */

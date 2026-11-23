@@ -810,6 +810,9 @@ class World {
     scene.add(this.sunLight);
     scene.add(this.sunLight.target);
     // real sun shadows around the camera: jets, buildings, hangars and wreckage throw shadows on the ground and on each other
+    // a warm point light that flashes when something explodes, lighting up the buildings and ground around it (always present, so no shader recompiles)
+    this.flashLight = new THREE.PointLight(0xffa860, 0, 1200, 1.2);
+    scene.add(this.flashLight);
     this.shadowOn = !!quality.shadows;
     this.shadowCenter = new THREE.Vector3();
     this.shadowExtent = 760;
@@ -865,6 +868,13 @@ class World {
     return h > 0 ? h : 0;
   }
 
+  /** light everything around (x,y,z) with the glare of an explosion; k ~ 1 for a fighter, 3 for a jumbo */
+  flash(x, y, z, k) {
+    this.flashLight.position.set(x, y + 30, z);
+    this.flashLight.distance = 500 + 450 * k;
+    this.flashLight.intensity = Math.max(this.flashLight.intensity, 2.2 + 1.8 * k);
+  }
+
   /** Keep the sun's shadow map centred on the area ahead of the camera, snapped to shadow texels so edges do not shimmer. */
   updateShadow(camera) {
     const L = this.sunLight, c = this.shadowCenter;
@@ -904,6 +914,7 @@ class World {
     this.terrain.update(p, false);
     this.city.update(dt);
     if (this.shadowOn) this.updateShadow(camera);
+    if (this.flashLight.intensity > 0.01) this.flashLight.intensity *= Math.exp(-dt * 2.6); else this.flashLight.intensity = 0;
     this.sky.position.copy(p);
     this.water.position.set(p.x, 0, p.z);
     this.waveTex.offset.set(p.x / 150 + this.time * 0.006, -p.z / 150 + this.time * 0.004);
