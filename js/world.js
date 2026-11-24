@@ -557,10 +557,12 @@ class Terrain {
       } else missing.push(nd);
     }
     missing.sort((a, b) => a.d - b.d);
-    const budget = force ? 1e9 : this.quality.maxBuild;
+    const budget = force ? 70 : this.quality.maxBuild; // (a forced build makes the 70 nearest chunks at once; the rest stream in over the next frames)
+    const tb = performance.now();
     let built = 0;
     for (const nd of missing) {
       if (built >= budget) break;
+      if (!force && built >= 1 && performance.now() - tb > 6) break; // never spend more than ~6 ms of a frame on building terrain: a slow computer streams in more slowly instead of stuttering
       const ch = this._buildChunk(nd.level, nd.ix, nd.iz, nd.key);
       ch.stamp = this.stamp;
       this.chunks.set(nd.key, ch);

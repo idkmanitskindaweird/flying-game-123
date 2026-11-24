@@ -31,9 +31,14 @@ function hudText(ctx, str, x, y, size, color, align, weight) {
   ctx.font = `${weight || 600} ${size}px "Segoe UI", system-ui, sans-serif`;
   ctx.textAlign = align || 'left';
   ctx.textBaseline = 'middle';
-  ctx.lineWidth = 3.5;
-  ctx.strokeStyle = 'rgba(0,18,10,0.65)';
-  ctx.strokeText(str, x, y);
+  if (typeof App !== 'undefined' && App.quality && App.quality.pixelRatio <= 1.25) { // a weaker setting: a cheap drop shadow instead of an outline (stroking text is slow)
+    ctx.fillStyle = 'rgba(0,18,10,0.7)';
+    ctx.fillText(str, x + 1.4, y + 1.4);
+  } else {
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(0,18,10,0.65)';
+    ctx.strokeText(str, x, y);
+  }
   ctx.fillStyle = color || HUD_COL;
   ctx.fillText(str, x, y);
 }

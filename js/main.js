@@ -151,11 +151,11 @@ App.renderReplays = function () {
   };
   const latest = App.recording;
   row('latest', 'Latest flight', latest ? replayLabel(latest) : 'nothing recorded yet \u2014 press G while flying',
-    latest ? [['Watch', () => { App.replayRec = latest; App.closeModals(); App.startMode('replay'); }, 'primary']] : []);
+    latest ? [['Watch', () => { App.replayRec = latest; App.closeModals(); App.launch('replay'); }, 'primary']] : []);
   for (let i = 0; i < REPLAY_SLOTS; i++) {
     const sl = ReplayStore.slots[i];
     const btns = [];
-    if (sl) btns.push(['Watch', () => { App.replayRec = ReplayStore.decode(sl); App.closeModals(); App.startMode('replay'); }, 'primary']);
+    if (sl) btns.push(['Watch', () => { App.replayRec = ReplayStore.decode(sl); App.closeModals(); App.launch('replay'); }, 'primary']);
     if (latest) {
       btns.push([sl ? 'Overwrite with latest' : 'Save latest here', () => {
         if (sl && !confirm(`Replace the replay in slot ${i + 1} with your latest flight?`)) return;
@@ -222,6 +222,18 @@ App.startMode = function (name, opts) {
     App.mode = App.modes.fly;
     App.mode.enter(name);
   }
+};
+
+/** start a mode from a menu button: the loading screen is shown first (and painted) so a slow computer does not look frozen while the scene is built */
+App.launch = function (name) {
+  if (App.launching) return;
+  App.launching = true;
+  const el = $id('loading'), p = el.querySelector('p'), old = p ? p.textContent : '';
+  if (p) p.textContent = name === 'free' ? 'Starting free flight...' : name === 'fly' ? 'Starting dogfight...' : name === 'replay' ? 'Loading the replay...' : 'Starting...';
+  el.classList.remove('hidden');
+  requestAnimationFrame(() => setTimeout(() => {
+    try { App.startMode(name === 'fly' ? 'dogfight' : name); } finally { el.classList.add('hidden'); if (p) p.textContent = old; App.launching = false; }
+  }, 40));
 };
 
 App.setPaused = function (p, silent) {
@@ -451,9 +463,9 @@ function bindMenus() {
     if (App.audio && App.audio.ok) App.audio.click();
     if (t.hasAttribute('data-close')) { App.closeModals(); return; }
     switch (t.dataset.act) {
-      case 'fly': App.startMode('dogfight'); break;
-      case 'free': App.startMode('free'); break;
-      case 'watch': App.startMode('watch'); break;
+      case 'fly': App.launch('fly'); break;
+      case 'free': App.launch('free'); break;
+      case 'watch': App.launch('watch'); break;
       case 'replay':
         if (!App.recording && !ReplayStore.any()) App.toast('Nothing recorded yet \u2014 press G while flying to record', 3200);
         else { App.renderReplays(); App.openModal('replays'); }
@@ -552,6 +564,7 @@ function boot() {
   App.ready = true;
   App.startMode('menu');
   $id('loading').classList.add('hidden');
+  setTimeout(() => { try { if (!App.audio) App.audio = new AudioEngine(); App.audio.volume = Settings.data.volume; if (!App.audio.ok) App.audio.init(); } catch (e) { /* audio is set up again when a mode starts */ } }, 1500);
   requestAnimationFrame((t) => { _last = t; frame(t); });
 }
 
