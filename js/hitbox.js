@@ -18,12 +18,16 @@ function hitboxesFor(jet) {
   const spec = jet.spec;
   const key = spec ? spec.key : 'fighter';
   if (_hbCache[key]) return _hbCache[key];
-  let out = null;
-  try { out = _hbFromMesh(jet, key); } catch (e) { out = null; }
-  if (!out || out.length < 8) out = _hbSimple(jet);
-  _hbGroup(out);
-  _hbCache[key] = out;
-  return out;
+  const quick = _hbSimple(jet);
+  _hbGroup(quick);
+  _hbCache[key] = quick; // a coarse hitbox at once...
+  const build = () => { // ...and the detailed one, built from the real model, a moment later (so the start of a flight never stalls on it)
+    let out = null;
+    try { out = _hbFromMesh(jet, key); } catch (e) { out = null; }
+    if (out && out.length >= 8) { _hbGroup(out); _hbCache[key] = out; }
+  };
+  if (typeof setTimeout === 'function' && !jet._hbNow) setTimeout(build, 900); else build();
+  return quick;
 }
 
 function _hbFromMesh(jet, key) {
@@ -55,18 +59,19 @@ function _hbFromMesh(jet, key) {
     }
   });
   if (tris.length < 30) return null;
-  let cell = Math.min(1.7, Math.max(0.55, Math.max(mx * 2, mz * 2) / 44));
+  const pq = (typeof App !== 'undefined' && App.quality && App.quality.plane !== undefined) ? App.quality.plane : 2;
+  let cell = Math.min(1.9, Math.max(0.6, Math.max(mx * 2, mz * 2) / 44)) * [1.45, 1.2, 1, 1, 1][pq]; // a weaker setting: fewer, bigger spheres
   let out = [];
   for (let attempt = 0; attempt < 5; attempt++) {
-    const vox = new Map(), step = cell * 0.5;
+    const vox = new Map(), step = cell * 0.7;
     for (let t = 0; t < tris.length; t += 9) {
       const ax = tris[t], ay = tris[t + 1], az = tris[t + 2], bx = tris[t + 3], by = tris[t + 4], bz = tris[t + 5], cx = tris[t + 6], cy = tris[t + 7], cz = tris[t + 8];
       const e = Math.max(Math.hypot(bx - ax, by - ay, bz - az), Math.hypot(cx - ax, cy - ay, cz - az), Math.hypot(cx - bx, cy - by, cz - bz));
-      const n = Math.min(80, Math.max(1, Math.ceil(e / step)));
+      const n = Math.min(40, Math.max(1, Math.ceil(e / step)));
       for (let i = 0; i <= n; i++) for (let j = 0; j <= n - i; j++) {
         const u = i / n, v = j / n, w = 1 - u - v;
         const x = ax * w + bx * u + cx * v, y = ay * w + by * u + cy * v, z = az * w + bz * u + cz * v;
-        const k = Math.floor(x / cell) + ',' + Math.floor(y / cell) + ',' + Math.floor(z / cell);
+        const k = ((Math.floor(x / cell) + 512) * 1024 + Math.floor(y / cell) + 512) * 1024 + Math.floor(z / cell) + 512; // (a number: much faster than a string key)
         let r = vox.get(k);
         if (!r) { r = [0, 0, 0, 0]; vox.set(k, r); }
         r[0] += x; r[1] += y; r[2] += z; r[3]++;
