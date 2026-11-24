@@ -22,6 +22,7 @@ const GFX = {
   terrain: [{ n: 24, b: 2 }, { n: 28, b: 3 }, { n: 32, b: 4 }, { n: 38, b: 5 }, { n: 46, b: 6 }], // terrain mesh detail, and how many chunks may build per frame
   trees: [0.3, 0.65, 1.0, 1.3, 1.7],
   clouds: [40, 70, 110, 140, 180],
+  dist: [20, 36, 52, 52, 52], // default render distance in km (the Render distance slider overrides it)
   particles: [2500, 4500, 7000, 11000, 18000], // smoke and fire particles
 };
 function gfxPreset(i) { return { res: i, shadows: i, terrain: i, trees: i, clouds: i, particles: i, crash: i, plane: i, aa: i > 0 }; }
@@ -33,6 +34,7 @@ function buildQuality(g) {
     terrainN: GFX.terrain[c('terrain', g.terrain)].n, maxBuild: GFX.terrain[c('terrain', g.terrain)].b,
     trees: GFX.trees[c('trees', g.trees)], clouds: GFX.clouds[c('clouds', g.clouds)], particles: GFX.particles[c('particles', g.particles)],
     crash: c('crash', g.crash), plane: c('plane', g.plane), aa: g.aa !== false,
+    dist: GFX.dist[c('terrain', g.terrain)],
   };
 }
 const QUALITY = { low: buildQuality(gfxPreset(0)), med: buildQuality(gfxPreset(1)), high: buildQuality(gfxPreset(2)), epic: buildQuality(gfxPreset(3)), ultra: buildQuality(gfxPreset(4)) };
@@ -262,7 +264,7 @@ class Terrain {
     this.ROOT = 16384;
     this.MAXL = 7;
     this.N = quality.terrainN;
-    this.splitK = 1.25;
+    this.splitK = quality.terrainN <= 24 ? 0.95 : quality.terrainN <= 28 ? 1.1 : 1.25; // how close you must be for a chunk to split into finer ones: a weaker setting keeps the coarse (cheap) chunks nearer
     this.range = 52000;
 
     this.group = new THREE.Group();
@@ -459,15 +461,16 @@ class Terrain {
   }
 
   /** hide the instanced trees of chunks outside the view (an InstancedMesh cannot be frustum-culled by three itself) */
-  cullTrees(frustum) {
+  cullTrees(frustum, cam, maxD) {
     let hidden = 0;
+    const lim = Math.min(maxD || 1e9, 14000); // (trees are small: they are not worth drawing beyond about 14 km)
     for (const ch of this.chunks.values()) {
       if (!ch.trees) continue;
       if (!ch.sph) {
         const bs = ch.mesh.geometry.boundingSphere;
         ch.sph = new THREE.Sphere(bs.center.clone().add(ch.mesh.position), bs.radius + 40);
       }
-      const on = frustum.intersectsSphere(ch.sph);
+      const on = frustum.intersectsSphere(ch.sph) && (!cam || Math.hypot(ch.sph.center.x - cam.x, ch.sph.center.z - cam.z) - ch.sph.radius < lim);
       ch.trees.visible = on;
       if (!on) hidden++;
     }
@@ -887,6 +890,7 @@ class World {
     this.scene = scene;
     this.quality = quality;
     scene.fog = new THREE.FogExp2(FOG_COLOR, 0.0000425);
+    this.viewDist = 52000;
     scene.background = new THREE.Color(FOG_COLOR);
 
     this.sunLight = new THREE.DirectionalLight(0xfff1dc, 1.0);
@@ -994,6 +998,22 @@ class World {
     this.terrain.update(pos, true);
   }
 
+  /**
+   * How far you can see, in km: the terrain streams out to that distance, the city and the trees beyond it are not drawn, and the haze is
+   * set so the far edge disappears into the fog. A smaller number means far fewer chunks to build and draw (a big help on a slow computer).
+   */
+  setViewDistance(km) {
+    const d = clamp(km, 4, 60) * 1000;
+    this.viewDist = d;
+    this.terrain.range = d;
+    this.terrain.lastPos.set(1e9, 1e9, 1e9); // re-stream the terrain
+    this.scene.fog.density = Math.max(0.0000425, 1.73 / d); // (nothing is left at the very edge)
+    if (typeof App !== 'undefined' && App.camera) {
+      App.camera.far = Math.max(8000, d * 1.25);
+      App.camera.updateProjectionMatrix();
+    }
+  }
+
   update(camera, dt) {
     this.time += dt;
     const p = camera.position;
@@ -1003,8 +1023,8 @@ class World {
     camera.updateMatrixWorld();
     _cullM.multiplyMatrices(camera.projectionMatrix, _cullInv.copy(camera.matrixWorld).invert());
     this.cullFrustum.setFromProjectionMatrix(_cullM);
-    this.city.cull(this.cullFrustum);
-    this.terrain.cullTrees(this.cullFrustum);
+    this.city.cull(this.cullFrustum, p, this.viewDist);
+    this.terrain.cullTrees(this.cullFrustum, p, this.viewDist);
     if (this.shadowOn) this.updateShadow(camera);
     if (this.flashLight.intensity > 0.01) this.flashLight.intensity *= Math.exp(-dt * 2.6); else this.flashLight.intensity = 0;
     this.sky.position.copy(p);

@@ -277,10 +277,11 @@ function buildCity(scene) {
   return {
     group, mesh, buildings, ground: gm, facadeTex: tex.facade,
     /** switch off the districts outside the view frustum (with a margin so shadows from just off-screen towers still fall into view) */
-    cull(frustum) {
+    cull(frustum, cam, maxD) {
       let shown = 0;
       for (let t = 0; t < tileSph.length; t++) {
-        const on = frustum.intersectsSphere(tileSph[t]);
+        const sph = tileSph[t];
+        const on = frustum.intersectsSphere(sph) && (!cam || !maxD || Math.hypot(sph.center.x - cam.x, sph.center.z - cam.z) - sph.radius < maxD); // in view AND within the render distance
         tileMats[t].visible = on;
         if (on) shown++;
       }

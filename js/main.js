@@ -4,7 +4,7 @@
    ========================================================================== */
 
 const Settings = {
-  data: { volume: 0.8, quality: 'med', weather: 'cloudy', hurricane: 'off', gfx: null, units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
+  data: { renderDist: 0, volume: 0.8, quality: 'med', weather: 'cloudy', hurricane: 'off', gfx: null, units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
   load() {
     try {
       const s = localStorage.getItem('afterburn.settings');
@@ -307,6 +307,8 @@ function bindGfx() {
     const i = GFX_PRESET_NAMES.indexOf($id('s-quality').value);
     if (i >= 0) {
       const g = gfxPreset(i);
+      $id('s-dist').value = GFX.dist[i]; $id('s-dist-o').textContent = GFX.dist[i] + ' km'; d.renderDist = GFX.dist[i]; Settings.save(); // a preset brings its own render distance (it can then be changed)
+      if (App.world) App.world.setViewDistance(GFX.dist[i]);
       for (const [id, key] of GFX_UI) $id(id).value = g[key];
       $id('g-aa').checked = g.aa;
     }
@@ -335,6 +337,9 @@ function syncSettingsUI() {
   $id('s-invert').checked = d.invert;
   $id('s-assist').checked = d.assist;
   $id('s-mouse').checked = d.mouse;
+  const rd = d.renderDist || (App.quality && App.quality.dist) || 52;
+  $id('s-dist').value = rd;
+  $id('s-dist-o').textContent = rd + ' km';
 }
 
 function bindSettings() {
@@ -346,6 +351,12 @@ function bindSettings() {
     Settings.save();
   });
   bindGfx();
+  $id('s-dist').addEventListener('input', () => { // live: no reload needed
+    d.renderDist = parseInt($id('s-dist').value, 10);
+    $id('s-dist-o').textContent = d.renderDist + ' km';
+    if (App.world) App.world.setViewDistance(d.renderDist);
+    Settings.save();
+  });
   // when "Advanced graphics" is opened, scroll the settings window so the whole list is in view (it can be taller than a small screen)
   const adv = document.querySelector('details.adv');
   if (adv) adv.addEventListener('toggle', () => { if (adv.open) requestAnimationFrame(() => adv.scrollIntoView({ block: 'nearest', behavior: 'smooth' })); });
@@ -523,6 +534,7 @@ function boot() {
   App.camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 2, 60000);
   App.camera.rotation.order = 'YXZ';
   App.world = new World(App.scene, App.quality);
+  App.world.setViewDistance(Settings.data.renderDist || App.quality.dist || 52);
   App.fx = new Effects(App.scene, App.quality);
   App.fx.ground = (x, z) => App.world.groundTop(x, z);
   App.resize();
