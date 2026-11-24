@@ -56,6 +56,7 @@ class CrashFX {
     this.marks = [];
     this.thudT = 0;
     this.collT = 0;
+    this.dustK = 1; // < 1 while a nuclear blast brings down hundreds of buildings (each gets fewer dust puffs)
     this.listener = null; // when set (the Replay Lab), sounds are heard from here and arrive after the travel time of sound
     this.focusChunk = null;
     this.charred = new THREE.Color(0x1b1a19);
@@ -207,8 +208,31 @@ class CrashFX {
     const gh = w.groundTop(p.x, p.z);
     const water = !!opts.water || (!opts.air && w.heightAt(p.x, p.z) < 0.5 && p.y < 40);
     const air = !!opts.air && p.y - gh > 40;
-    const cx = p.x, cz = p.z, cy = air ? p.y : Math.max(p.y, gh + 1.5);
+    const cx = p.x, cz = p.z, cy = air ? p.y : Math.max(p.y, w.surfaceAt(p.x, p.z) + 1.5); // (a wall strike happens at the height of the wall, not on the roof)
     const vel = jet.vel;
+
+    // ---- how the aircraft meets the ground decides what kind of crash it is --------------------------------------------------
+    //  'skid'   : a shallow angle at speed: it hits flat, slides, sheds wings and engines, and leaves a long burning trail
+    //  'tumble' : a medium angle: it cartwheels and breaks up along a shorter path
+    //  'impact' : a steep dive or a wall: it is pulverised in one spot, with a crater
+    let kind = air ? 'air' : water ? 'water' : 'impact';
+    const nrm = new THREE.Vector3(0, 1, 0), vT = new THREE.Vector3(), tdir = new THREE.Vector3(1, 0, 0);
+    let speedT = 0, vInto = 0, skid = 0;
+    if (!air && !water) {
+      const e = 4, gx = (w.surfaceAt(cx + e, cz) - w.surfaceAt(cx - e, cz)) / (2 * e), gz = (w.surfaceAt(cx, cz + e) - w.surfaceAt(cx, cz - e)) / (2 * e);
+      const il = 1 / Math.sqrt(gx * gx + 1 + gz * gz);
+      nrm.set(-gx * il, il, -gz * il);
+      const vn = vel.dot(nrm);
+      vInto = Math.max(0, -vn);
+      vT.copy(vel).addScaledVector(nrm, -vn);
+      speedT = vT.length();
+      if (speedT > 1) tdir.copy(vT).multiplyScalar(1 / speedT);
+      const wall = p.y - w.surfaceAt(cx, cz) > 6; // it hit something standing on the ground: a building or the tower
+      const ang = Math.atan2(vInto, Math.max(speedT, 1));
+      kind = wall || ang > 0.95 ? 'impact' : ang < 0.34 && speedT > 35 ? 'skid' : 'tumble';
+      skid = kind === 'skid' ? clamp((speedT * speedT) / (2 * 0.42 * 9.81), 25, 650) : kind === 'tumble' ? clamp((speedT * speedT) / (2 * 0.9 * 9.81) * 0.5, 10, 220) : 0;
+    }
+    const half = dims ? (dims.L / 2) * sc : 8.5;
 
     // 1. the explosion
     if (water) {
@@ -228,7 +252,11 @@ class CrashFX {
     }
 
     // 2. the airframe breaks into pieces
-    const parts = this.partsFor(jet);
+    let parts = this.partsFor(jet);
+    if (jet.lost && (jet.lost.wingL || jet.lost.wingR)) { // a wing that already came off earlier is not part of this wreck
+      const cutL = wingCutFor(jet) / sc;
+      parts = parts.filter((pt) => !((jet.lost.wingL && pt.at[0] < -cutL * 0.9) || (jet.lost.wingR && pt.at[0] > cutL * 0.9)));
+    }
     let biggest = null, bigSize = 0;
     for (const part of parts) {
       const mesh = this.makeMesh(part, sc);
@@ -236,17 +264,35 @@ class CrashFX {
       mesh.position.copy(p).add(_kv);
       mesh.quaternion.copy(jet.quat);
       const radius = Math.max(0.5, Math.max(part.size[0], part.size[1], part.size[2]) * sc * 0.32);
-      const burst = (air ? rand(25, 70) : rand(8, 38)) * Math.sqrt(sc);
       const out = _kw.copy(_kv).normalize();
-      const c = {
-        mesh, r: radius, s: radius * 0.35 + 0.5,
-        vel: new THREE.Vector3(vel.x * (air ? 0.85 : 0.9), vel.y * (air ? 0.85 : 0.2), vel.z * (air ? 0.85 : 0.9)),
-        ang: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(rand(1.5, air ? 7 : 5)),
-        rest: false, age: 0, burn: rand(8, 20) * (0.7 + 0.3 * Math.min(sc, 2)), acc: 0, sunk: 0, fade: 1, water: false,
-      };
-      c.vel.addScaledVector(out, burst);
-      c.vel.y += rand(2, air ? 18 : 28) * Math.sqrt(sc);
-      c.fric = 1.5;
+      let c;
+      if (!air && !water) {
+        // the parts that hit first stop first; the rear carries on with most of the speed along the ground
+        const sPos = speedT > 1 ? clamp(_kv.dot(tdir) / half, -1, 1) : 0; // +1 at the front (towards the direction of travel), -1 at the rear
+        const rear = (1 - sPos) / 2;
+        const ret = kind === 'impact' ? 0.05 + 0.08 * rear : kind === 'skid' ? 0.7 + 0.24 * rear : 0.36 + 0.28 * rear;
+        const burst = (kind === 'impact' ? rand(10, 42) : rand(3, 14)) * Math.sqrt(sc);
+        c = {
+          mesh, r: radius, s: radius * 0.35 + 0.5,
+          vel: new THREE.Vector3().copy(vT).multiplyScalar(ret).addScaledVector(nrm, vInto * rand(0.04, 0.22) * (1 - ret) + rand(1, 7)),
+          ang: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(kind === 'skid' ? rand(0.4, 2.2) : rand(2, 6)),
+          rest: false, age: 0, burn: rand(8, 20) * (0.7 + 0.3 * Math.min(sc, 2)), acc: 0, sunk: 0, fade: 1, water: false,
+        };
+        c.vel.addScaledVector(out, burst);
+        if (sPos > 0.55 && kind !== 'skid') mesh.scale.z *= 0.55; // the nose is crushed against what it hit
+        c.fric = kind === 'skid' ? 0.6 : 1.4;
+      } else {
+        const burst = (air ? rand(25, 70) : rand(8, 38)) * Math.sqrt(sc);
+        c = {
+          mesh, r: radius, s: radius * 0.35 + 0.5,
+          vel: new THREE.Vector3(vel.x * (air ? 0.85 : 0.9), vel.y * (air ? 0.85 : 0.2), vel.z * (air ? 0.85 : 0.9)),
+          ang: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(rand(1.5, air ? 7 : 5)),
+          rest: false, age: 0, burn: rand(8, 20) * (0.7 + 0.3 * Math.min(sc, 2)), acc: 0, sunk: 0, fade: 1, water: false,
+        };
+        c.vel.addScaledVector(out, burst);
+        c.vel.y += rand(2, air ? 18 : 28) * Math.sqrt(sc);
+        c.fric = 1.5;
+      }
       if (part.shard) { // torn-off plates are thrown wide and flutter down
         c.vel.multiplyScalar(rand(1.0, 1.5)); c.vel.y += rand(5, 30);
         c.ang.multiplyScalar(2.2); c.burn = rand(0.4, 3); c.s *= 0.5; c.fric = 2.6;
@@ -260,6 +306,37 @@ class CrashFX {
     }
     this.focusChunk = biggest;
 
+    // 2-. what the ground does: a skid leaves a long gouged, burning trail; a steep impact digs a crater and throws earth
+    if (!air && !water && !(kind === 'impact' && p.y - w.surfaceAt(cx, cz) > 6)) {
+      const soil = [0x4d3b29, 0x5b4733, 0x3c4a2a, 0x6a5a44];
+      const bigp = !!jet.spec, fbp = bigp ? clamp(es * 2.3, 5, 10.5) : 1.7;
+      if (kind === 'skid' || kind === 'tumble') {
+        const nS = Math.min(14, Math.floor(skid / 45));
+        for (let k = 1; k <= nS; k++) {
+          const d = k * 45, px = cx + tdir.x * d, pz = cz + tdir.z * d, gyp = w.surfaceAt(px, pz);
+          this.sites.push({ x: px, y: gyp, z: pz, t: 0, life: rand(14, 34), size: es * rand(0.3, 0.55), acc: 0 });
+          this.timers.push({ t: d / Math.max(speedT * 0.7, 20), fn: () => {
+            const fx2 = app.fx;
+            for (let i = 0; i < 14; i++) fx2.glow(px + rand(-6, 6), gyp + 0.6, pz + rand(-6, 6), rand(-9, 9) + tdir.x * 10, rand(3, 16), rand(-9, 9) + tdir.z * 10, rand(0.3, 0.8), 1.8, 0.6, 1, rand(0.7, 0.95), rand(0.3, 0.5), 1, 0.5);
+            for (let i = 0; i < 6; i++) fx2.puff(px + rand(-6, 6), gyp + 1, pz + rand(-6, 6), rand(-5, 5), rand(1, 6), rand(-5, 5), rand(2, 4), 6, 22, rand(0.36, 0.5), 0.55, 1.2, 1);
+            if (bigp && k % 5 === 0) fx2.fireball(px, gyp + 2, pz, fbp * 0.4, false);
+          } });
+        }
+        // clods of earth torn up along the whole path
+        const nC = kind === 'skid' ? clamp(Math.round(skid / 5), 12, 70) : 22;
+        for (let i = 0; i < nC; i++) {
+          const d = Math.random() * Math.max(skid, 10), px = cx + tdir.x * d, pz = cz + tdir.z * d;
+          this.addDebris(px + rand(-5, 5), w.surfaceAt(px, pz) + 1, pz + rand(-5, 5), tdir.x * speedT * 0.25 + rand(-8, 8), rand(5, 22), tdir.z * speedT * 0.25 + rand(-8, 8), rand(0.5, 1.9), soil[i % soil.length], 0);
+        }
+      } else {
+        // a steep impact: a crater with earth thrown out of it in every direction
+        for (let i = 0; i < 46; i++) {
+          const a = rand(0, TAU), sp = rand(10, 46) * Math.sqrt(es / 1.7);
+          this.addDebris(cx + Math.cos(a) * 3, gh + 1, cz + Math.sin(a) * 3, Math.cos(a) * sp, rand(10, 36), Math.sin(a) * sp, rand(0.5, 2.2), soil[i % soil.length], 0);
+        }
+      }
+    }
+
     // 2a. the smoke: a huge black column goes up at once, and a plume keeps feeding it for a minute or more
     if (!water) {
       const fxq = app.fx.budget, big = !!jet.spec;
@@ -272,14 +349,18 @@ class CrashFX {
       this.addPlume(cx, gh + 2, cz, es * 54, big ? 110 : 70, 3.4 * fxq, 'soot');
     }
 
-    // 2b. a crash in the city: the shock wave brings the buildings around it down
-    if (!water && w.city && w.city.inside(cx, cz, 120) && (!air || cy - gh < 160)) w.city.blast(cx, cz, 70 + 62 * es, es, this);
+    // 2b. a crash in the city: the building the aircraft actually hit comes down; the others only if the blast is big enough to reach them
+    // (a fighter's blast hardly leaves the building it hit; an airliner's fuel load can take its neighbours too)
+    if (!water && w.city && w.city.inside(cx, cz, 120) && (!air || cy - gh < 400)) {
+      const shock = es > 2 ? 22 * (es - 1.8) * (jet.spec && jet.spec.scale > 1.5 ? 1.2 : 1) : 0;
+      w.city.blast(cx, cz, shock, es, this, cy, 5 + (jet.spec ? jet.spec.scale * 3 : 0));
+    }
 
     // 3. the site burns, leaves a scorch mark, and the fuel goes up a few more times
     if (!water) {
       this.sites.push({ x: cx, y: air ? gh : gh, z: cz, t: 0, life: air ? 0 : 30, size: es, acc: 0 });
       if (!air) {
-        this.scorch(cx, gh, cz, vel, es);
+        this.scorch(cx, gh, cz, kind === 'skid' || kind === 'tumble' ? vT : vel, es, kind === 'impact' ? -1 : skid);
         for (let k = 0; k < 3; k++) {
           const t = 0.35 + k * rand(0.35, 0.7);
           this.timers.push({ t, fn: () => {
@@ -295,7 +376,8 @@ class CrashFX {
     // 4. sound
     this.listener = opts.listener || null;
     const cp = this.listener || app.camera.position;
-    const snd = () => { if (app.audio && app.audio.ok) app.audio.crash({ x: cx - cp.x, y: cy - cp.y, z: cz - cp.z }, es / 1.7, water); };
+    const skidSecs = kind === 'skid' ? skid / Math.max(speedT * 0.6, 15) : 0; // a long scraping, tearing sound while it slides
+    const snd = () => { if (app.audio && app.audio.ok) app.audio.crash({ x: cx - cp.x, y: cy - cp.y, z: cz - cp.z }, es / 1.7, water, skidSecs); };
     this.after(snd, cx, cy, cz);
   }
 
@@ -318,7 +400,8 @@ class CrashFX {
     }
   }
 
-  scorch(x, y, z, vel, es) {
+  /** a dark scorched mark on the ground. skid > 0: a long gouged trench along the path of a skid; skid < 0: a round crater; 0: a mark that follows the velocity */
+  scorch(x, y, z, vel, es, skid) {
     if (!this._markTex) {
       const [cv, g] = makeCanvas(128, 128);
       const gr = g.createRadialGradient(64, 64, 6, 64, 64, 62);
@@ -331,11 +414,14 @@ class CrashFX {
     const mat = new THREE.MeshBasicMaterial({ map: this._markTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
     const m = new THREE.Mesh(geo, mat);
     const sp = Math.hypot(vel.x, vel.z);
-    const len = clamp(sp * 0.35 * Math.sqrt(es), 30 * es, 260 * es);
-    m.scale.set(26 * es, 1, len);
     const hx = sp > 1 ? vel.x / sp : 0, hz = sp > 1 ? vel.z / sp : 1;
+    let len, wid, off;
+    if (skid > 0) { len = skid + 24 * es; wid = 17 * es; off = len * 0.5 - 12 * es; }
+    else if (skid < 0) { len = wid = 34 * es; off = 0; }
+    else { len = clamp(sp * 0.35 * Math.sqrt(es), 30 * es, 260 * es); wid = 26 * es; off = len * 0.35; }
+    m.scale.set(wid, 1, len);
     m.rotation.y = Math.atan2(hx, hz);
-    m.position.set(x + hx * len * 0.35, y + 0.3, z + hz * len * 0.35);
+    m.position.set(x + hx * off, y + 0.3, z + hz * off);
     m.renderOrder = 2;
     this.group.add(m);
     this.marks.push(m);
@@ -353,28 +439,29 @@ class CrashFX {
     const app = this.app, fx = app.fx;
     const H = bl.H, cx = bl.x, cz = bl.z;
     // billowing dust from the whole height of the building
-    const n = clamp(10 + Math.round(H / 8), 10, 34);
+    const dk = this.dustK;
+    const n = Math.max(2, Math.round(clamp(10 + Math.round(H / 8), 10, 34) * dk));
     for (let i = 0; i < n; i++) {
       fx.puff(cx + rand(-1, 1) * bl.hw, y0 + Math.random() * H, cz + rand(-1, 1) * bl.hd, rand(-14, 14), rand(-4, 9), rand(-14, 14),
         rand(5, 9), rand(10, 16), rand(38, 70) + H * 0.15, rand(0.5, 0.7), rand(0.5, 0.75), 0.9, rand(0.5, 2));
     }
     // the dust wave that rolls out along the street
-    for (let i = 0; i < 14; i++) {
-      const a = (i / 14) * TAU + rand(-0.2, 0.2), sp = rand(20, 42);
+    for (let i = 0, nr = Math.max(3, Math.round(14 * dk)); i < nr; i++) {
+      const a = (i / nr) * TAU + rand(-0.2, 0.2), sp = rand(20, 42);
       fx.puff(cx + Math.cos(a) * bl.hw, y0 + 2, cz + Math.sin(a) * bl.hd, Math.cos(a) * sp, rand(0.5, 3), Math.sin(a) * sp, rand(3.5, 6.5), rand(8, 12), rand(26, 46), rand(0.45, 0.62), rand(0.45, 0.7), 1.2, rand(0, 1));
     }
     // windows blowing out: glittering glass
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0, ng = Math.round(16 * dk); i < ng; i++) {
       fx.glow(cx + rand(-1, 1) * bl.hw, y0 + Math.random() * H, cz + rand(-1, 1) * bl.hd, rand(-18, 18), rand(-4, 12), rand(-18, 18), rand(0.5, 1.1), 1.6, 0.6, 0.75, 0.92, 1, 0.85, 0.5);
     }
     // the dust cloud: great pale clouds that swell, rise and drift downwind for half a minute
     const fq = app.fx.budget;
-    const nd = Math.round(clamp(3 + H / 28, 3, 11) * fq);
+    const nd = Math.max(1, Math.round(clamp(3 + H / 28, 3, 11) * fq * dk));
     for (let i = 0; i < nd; i++) {
       fx.bigPuff(cx + rand(-1, 1) * bl.hw, y0 + rand(0.05, 1) * H, cz + rand(-1, 1) * bl.hd, rand(90, 180) * (0.55 + H / 200), 'dust', rand(22, 42), rand(2, 10));
     }
     // some of them burn, and burning buildings send up a column of black smoke
-    if (Math.random() < 0.4) {
+    if (Math.random() < (dk < 1 ? 0.02 : 0.4)) {
       this.sites.push({ x: cx, y: y0 + H * 0.12, z: cz, t: 0, life: rand(18, 38), size: clamp(0.8 + H / 120, 0.8, 2.4), acc: 0 });
       this.addPlume(cx, y0 + H * 0.15, cz, 36 + H * 0.42, rand(45, 90), 1.4 * fq, 'soot');
     }
@@ -412,6 +499,7 @@ class CrashFX {
    */
   slab(bl, yBot, yTop, y0, first) {
     const app = this.app, fx = app.fx;
+    const dk = this.dustK;
     const hh = yTop - yBot;
     if (hh < 0.5) return;
     const mid = (yBot + yTop) / 2;
@@ -420,10 +508,10 @@ class CrashFX {
     const imp = bl.imp;
     let ix = 0, iz = 0, k = 0.4;
     if (imp) { ix = bl.x - imp.x; iz = bl.z - imp.z; const il = Math.hypot(ix, iz) || 1; ix /= il; iz /= il; k = clamp(1 - imp.d / imp.R, 0.15, 1); }
-    const cm = CRASH_Q.cells[crashLevel()];
-    const cols = clamp(Math.round(hw * 2 / 8), 1, cm), rows = clamp(Math.round(hd * 2 / 8), 1, cm), lays = hh > 18 ? 2 : 1;
+    const cm = dk < 1 ? 1 : CRASH_Q.cells[crashLevel()];
+    const cols = clamp(Math.round(hw * 2 / 8), 1, cm), rows = clamp(Math.round(hd * 2 / 8), 1, cm), lays = hh > 18 && dk >= 1 ? 2 : 1;
     const sx = hw * 2 / cols, sz = hd * 2 / rows, sy = hh / lays;
-    if (this.chunks.length < CRASH_Q.cap[crashLevel()]) {
+    if (this.chunks.length < (dk < 1 ? 260 : CRASH_Q.cap[crashLevel()])) {
       const tone = new THREE.Color(bl.color).multiplyScalar(rand(0.55, 0.85)); // already blackened by the blast
       for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) for (let l = 0; l < lays; l++) {
         const px = bx - hw + (c + 0.5) * sx, pz = bz - hd + (r + 0.5) * sz, py = yBot + (l + 0.5) * sy;
@@ -439,23 +527,38 @@ class CrashFX {
           const sp = rand(0.6, 1.4);
           this.chunks.push({
             mesh, r: radius, s: radius * 0.3 + 0.4,
-            vel: new THREE.Vector3(ix * rand(8, 34) * k * sp + (ox / ol) * rand(3, 15), rand(0, 12) + (py - y0) * 0.02, iz * rand(8, 34) * k * sp + (oz / ol) * rand(3, 15)),
+            vel: new THREE.Vector3(ix * rand(6, 30) * k * sp + (ox / ol) * rand(2, 9) * (0.5 + k), (first ? rand(-2, 10) * k : rand(-9, 1)) - (py - y0) * 0.01, iz * rand(6, 30) * k * sp + (oz / ol) * rand(2, 9) * (0.5 + k)),
             ang: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(rand(0.8, 4)),
             rest: false, age: 0, burn: Math.random() < 0.3 ? rand(2, 7) : 0, acc: 0, sunk: 0, fade: 1, water: false, fric: 1.7, interval: 0.2,
           });
         }
       }
     }
+    // concrete lumps, broken slabs and steel: a spread of sizes from boulders to gravel
+    if (this.chunks.length < (dk < 1 ? 300 : CRASH_Q.cap[crashLevel()] + 60)) {
+      const nl = Math.max(dk < 1 ? 1 : 6, Math.round(clamp(Math.round(hw * hd * hh / 260), 6, 22) * dk)), grey = [0x77756f, 0x5e5d59, 0x8a877e, 0x3d3c3a];
+      for (let i = 0; i < nl; i++) {
+        const big = Math.random() < 0.2;
+        this.addDebris(bx + rand(-1, 1) * hw, yBot + Math.random() * hh, bz + rand(-1, 1) * hd, ix * rand(2, 22) * k + rand(-7, 7), (first ? rand(0, 12) : rand(-8, 2)), iz * rand(2, 22) * k + rand(-7, 7), big ? rand(1.6, 3.4) : rand(0.35, 1.2), grey[i % 4], 0);
+      }
+    }
+    // the dust surge: the falling floors compress the air and blow a roiling wall of dust out along the street
+    if (!first) {
+      for (let i = 0, ns = Math.max(1, Math.round(7 * dk)); i < ns; i++) {
+        const a = (i / ns) * TAU + rand(-0.3, 0.3), sp = rand(14, 34), rr = Math.max(hw, hd);
+        fx.puff(bx + Math.cos(a) * rr, y0 + 2, bz + Math.sin(a) * rr, Math.cos(a) * sp, rand(0.5, 3), Math.sin(a) * sp, rand(3, 5.5), rand(7, 11), rand(22, 40), rand(0.45, 0.62), rand(0.4, 0.65), 1.2, rand(0, 0.6));
+      }
+    }
     // a swelling cloud of dust where each slab lets go
-    for (let i = 0, nn = Math.max(1, Math.round(2 * app.fx.budget)); i < nn; i++) fx.bigPuff(bx + rand(-1, 1) * hw, mid, bz + rand(-1, 1) * hd, rand(55, 120) * (0.6 + hh / 50), 'dust', rand(16, 32), rand(1, 7));
+    for (let i = 0, nn = Math.max(1, Math.round(2 * app.fx.budget * dk)); i < nn; i++) fx.bigPuff(bx + rand(-1, 1) * hw, mid, bz + rand(-1, 1) * hd, rand(55, 120) * (0.6 + hh / 50), 'dust', rand(16, 32), rand(1, 7));
     // dust, glass and a flash where the floors let go
-    const n = clamp(5 + Math.round(hh / 5), 5, 14);
+    const n = Math.max(2, Math.round(clamp(5 + Math.round(hh / 5), 5, 14) * dk));
     for (let i = 0; i < n; i++) {
       fx.puff(bx + rand(-1, 1) * hw, yBot + Math.random() * hh, bz + rand(-1, 1) * hd, rand(-12, 12) + ix * 8, rand(-3, 8), rand(-12, 12) + iz * 8,
         rand(4, 8), rand(8, 14), rand(30, 60), rand(0.5, 0.68), rand(0.5, 0.75), 0.9, rand(0.5, 1.8));
     }
-    for (let i = 0; i < 10; i++) fx.glow(bx + rand(-1, 1) * hw, yBot + Math.random() * hh, bz + rand(-1, 1) * hd, rand(-16, 16), rand(-3, 10), rand(-16, 16), rand(0.5, 1.0), 1.5, 0.6, 0.75, 0.92, 1, 0.85, 0.5);
-    if (first) fx.explosion(bx, mid, bz, clamp(bl.H / 140, 0.25, 1.1), ix * 6, 0, iz * 6);
+    for (let i = 0, ng = Math.round(10 * dk); i < ng; i++) fx.glow(bx + rand(-1, 1) * hw, yBot + Math.random() * hh, bz + rand(-1, 1) * hd, rand(-16, 16), rand(-3, 10), rand(-16, 16), rand(0.5, 1.0), 1.5, 0.6, 0.75, 0.92, 1, 0.85, 0.5);
+    if (first && dk >= 1) fx.explosion(bx, mid, bz, clamp(bl.H / 140, 0.25, 1.1), ix * 6, 0, iz * 6);
     if (this.thudT <= 0) { this.thudT = 0.1; this.noise(bx, mid, bz, 'thud', clamp(hh / 14, 0.5, 2)); }
   }
 
@@ -471,6 +574,33 @@ class CrashFX {
       ang: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(rand(1.5, 5)),
       rest: false, age: 0, burn, acc: 0, sunk: 0, fade: 1, water: false, fric: 1.8, interval: 0.22,
     });
+  }
+
+  /** a wing is torn off: its pieces fly away trailing fire and smoke (the aircraft itself is handled by the caller) */
+  wingOff(jet, side) {
+    const app = this.app, fx = app.fx;
+    const sc = jet.spec ? jet.spec.scale : 1, cutLocal = wingCutFor(jet) / sc;
+    const right = _kw.set(1, 0, 0).applyQuaternion(jet.quat).clone(), up = new THREE.Vector3(0, 1, 0).applyQuaternion(jet.quat);
+    const parts = this.partsFor(jet).filter((p) => !p.shard && !p.cargo && !p.wheel && !p.glass && side * p.at[0] > cutLocal * 0.9);
+    for (const part of parts) {
+      const mesh = this.makeMesh(part, sc);
+      _kv.set(part.at[0] * sc, part.at[1] * sc, part.at[2] * sc).applyQuaternion(jet.quat);
+      mesh.position.copy(jet.pos).add(_kv);
+      mesh.quaternion.copy(jet.quat);
+      const radius = Math.max(0.5, Math.max(part.size[0], part.size[1], part.size[2]) * sc * 0.32);
+      const c = {
+        mesh, r: radius, s: radius * 0.35 + 0.5,
+        vel: jet.vel.clone().multiplyScalar(0.96).addScaledVector(right, side * rand(8, 24)).addScaledVector(up, rand(2, 12)),
+        ang: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(rand(2, 6)),
+        rest: false, age: 0, burn: rand(9, 18), acc: 0, sunk: 0, fade: 1, water: false, fric: 1.5, interval: 0.06,
+      };
+      this.chunks.push(c);
+    }
+    // sparks, a flash and a puff at the break
+    _kv.set(side * cutLocal * sc, 0, 0).applyQuaternion(jet.quat).add(jet.pos);
+    fx.explosion(_kv.x, _kv.y, _kv.z, 0.3 * Math.sqrt(sc), jet.vel.x * 0.2, jet.vel.y * 0.2, jet.vel.z * 0.2);
+    const cp = this.listener || app.camera.position, a = app.audio;
+    if (a && a.ok) { a.hit(); if (a.thud) a.thud({ x: _kv.x - cp.x, y: _kv.y - cp.y, z: _kv.z - cp.z }, 1.6); }
   }
 
   /** run a sound function after sound has travelled from (x,y,z) to the listener (no delay in live flight) */
@@ -563,6 +693,10 @@ class CrashFX {
             pos.x += hit.nx * hit.pen; pos.y += hit.ny * hit.pen; pos.z += hit.nz * hit.pen;
             nx = hit.nx; ny = hit.ny; nz = hit.nz;
             wall = ny < 0.5;
+            if (hit.cut && ny > 0.5) { // landed on the broken top of a building: it slides off the stump instead of piling into a tower
+              const rdx = pos.x - hit.bx, rdz = pos.z - hit.bz, rl = Math.hypot(rdx, rdz) || 1;
+              c.vel.x += (rdx / rl) * 34 * dt; c.vel.z += (rdz / rl) * 34 * dt; c.slide = 0.4;
+            }
           }
         }
         if (touch && inWater && touch === 1) {
@@ -595,7 +729,8 @@ class CrashFX {
             fx.glow(pos.x, pos.y - c.r * 0.7, pos.z, rand(-6, 6), rand(4, 16), rand(-6, 6), rand(0.2, 0.5), 1.5, 0.6, 1, rand(0.7, 0.9), rand(0.3, 0.5), 1, 0.5);
             fx.puff(pos.x, pos.y - c.r * 0.5, pos.z, -tx * 0.1 + rand(-3, 3), rand(1, 5), -tz * 0.1 + rand(-3, 3), rand(1.5, 3), 3, 9, wall ? 0.6 : 0.42, 0.5, 1.2, 1);
           }
-          if (hs < 1.2 && Math.abs(vn2) < 1.5 && c.ang.length() < 0.5 && ny > 0.78) c.rest = true;
+          if (c.slide > 0) c.slide -= dt;
+          else if (hs < 1.2 && Math.abs(vn2) < 1.5 && c.ang.length() < 0.5 && ny > 0.78) c.rest = true;
         } else if (!inWater && pos.y - gh < 16 && w.terrain.forestMask(pos.x, pos.z) > 0.45 && !c.rest) {
           // low through a forest: trees snap and slow the piece down
           c.vel.multiplyScalar(Math.exp(-dt * 1.1));

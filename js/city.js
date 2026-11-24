@@ -218,6 +218,7 @@ function buildCity(scene) {
   }
   const pending = [], collapsing = [];
   let blastFx = null;
+  let dirty = false, dirtyT = 0;
 
   /** cut a building off at height cutY: everything above is gone (it has become flying chunks) */
   const applyCut = (bl, cutY) => {
@@ -230,31 +231,45 @@ function buildCity(scene) {
       const frac = (cutY - lo) / (hi - lo);
       for (let i = v0; i < v0 + n; i++) {
         if (basePos[i * 3 + 1] > cutY) {
-          posArr[i * 3 + 1] = cutY;
+          // the break is not a clean plane: every corner of the fracture is at a different height (a diagonal, jagged stump)
+          const hs = Math.sin(basePos[i * 3] * 12.9898 + basePos[i * 3 + 2] * 78.233) * 43758.5453;
+          posArr[i * 3 + 1] = Math.max(lo + 0.4, cutY - (hs - Math.floor(hs)) * (bl.jag || 0));
           uvArr[i * 2 + 1] = baseUV[i * 2 + 1] * frac; // the window pattern shortens with the wall instead of stretching
         }
       }
     }
+    if (collapsing.length > 30) { dirty = true; return; } // a mass collapse: the big buffers are uploaded a few times a second, not every frame
     posAttr.needsUpdate = true;
     uvAttr.needsUpdate = true;
   };
 
   const startCollapse = (bl) => {
     bl.state = 1;
-    const H = bl.H, stub = clamp(H * 0.07, 2.5, 9);
-    const nS = H < 40 ? 1 : clamp(Math.round(H / 26), 2, 12); // slabs, top first
-    const step = (H - stub) / nS;
-    const dur = nS === 1 ? 0 : 0.5 + nS * 0.22;
+    // how badly it is hit: next to the crash it is pulverised to the foundations; further out only the upper floors fail and the rest stands, scorched
+    const sev = bl.imp ? clamp(1 - bl.imp.d / bl.imp.R, 0, 1) : 1;
+    const keep = sev > 0.45 ? 0 : Math.pow(1 - sev / 0.45, 1.5) * 0.55; // fraction of the height that survives
+    const H = bl.H;
+    let stub = Math.max(clamp(H * 0.07, 2.5, 9), H * keep);
+    if (bl.imp && bl.imp.direct && bl.imp.y !== null) {
+      // the aircraft hit at one height: the floors above the impact lose their support and come down; the floors below stay standing
+      const es = bl.imp.es, minKeep = clamp(0.5 - 0.07 * es, 0.22, 0.42);
+      stub = clamp(bl.imp.y - 6, H * minKeep, H - 6);
+    }
+    bl.jag = clamp(Math.min(bl.hw, bl.hd) * 0.4, 1, 5);
+    const fall = H - stub;
+    const nS = fall < 40 ? 1 : clamp(Math.round(fall / 26), 2, 12); // slabs, top first
+    const step = fall / nS;
     bl.levels = []; bl.times = [];
     for (let i = 0; i < nS; i++) {
       bl.levels.push(H - step * (i + 1));
-      bl.times.push(nS === 1 ? 0 : (i / (nS - 1)) * dur + Math.random() * 0.12);
+      // the crush front accelerates: each floor lands on the next faster than the last (a = 14 m/s^2 of the falling mass)
+      bl.times.push(nS === 1 ? 0 : Math.sqrt((2 * step * i) / 14) + Math.random() * 0.1);
     }
     bl.next = 0; bl.t = 0; bl.cut = H;
     for (const [v0, n] of bl.ranges) for (let i = v0; i < v0 + n; i++) { // what is left standing is scorched
       colArr[i * 3] *= 0.34; colArr[i * 3 + 1] *= 0.32; colArr[i * 3 + 2] *= 0.3;
     }
-    colAttr.needsUpdate = true;
+    if (collapsing.length > 30 || pending.length > 30) dirty = true; else colAttr.needsUpdate = true;
     collapsing.push(bl);
     if (blastFx) blastFx.buildingDown(bl, y0);
   };
@@ -291,20 +306,26 @@ function buildCity(scene) {
     },
     inside(x, z, pad) { return Math.abs(x - C.x) < C.hx + pad && Math.abs(z - C.z) < C.hz + pad; },
     /** An explosion at (cx, cz): buildings within R go down, nearest first (the shock wave travels at ~260 m/s). */
-    blast(cx, cz, R, es, fx) {
+    blast(cx, cz, R, es, fx, cy, pad, opt) {
       blastFx = fx;
       const hit = [];
       for (const bl of buildings) {
         if (bl.state) continue;
+        // direct hit: the aircraft is inside (or against) this building's footprint, below its roof
+        const ex = Math.max(0, Math.abs(bl.x - cx) - bl.hw), ez = Math.max(0, Math.abs(bl.z - cz) - bl.hd), edge = Math.hypot(ex, ez);
+        const direct = edge <= (pad || 6) && (cy === undefined || cy - y0 < bl.H + 3);
+        if (direct) { hit.push([0, bl, true]); continue; }
+        if (R <= 0) continue;
         const d = Math.max(0, Math.hypot(bl.x - cx, bl.z - cz) - Math.max(bl.hw, bl.hd));
         if (d > R) continue;
         const chance = d < R * 0.35 ? 1 : 1 - Math.pow((d - R * 0.35) / (R * 0.65), 1.3);
-        if (Math.random() < chance) hit.push([d, bl]);
+        if (Math.random() < chance) hit.push([d, bl, false]);
       }
       hit.sort((a, b) => a[0] - b[0]);
-      for (const [d, bl] of hit.slice(0, CRASH_Q.blast[crashLevel()])) { bl.state = 3; bl.imp = { x: cx, z: cz, d, R, es }; pending.push({ bl, t: d / 260 + Math.random() * 0.45 }); }
+      for (const [d, bl, dir] of hit.slice(0, (opt && opt.cap) || CRASH_Q.blast[crashLevel()])) { bl.state = 3; bl.imp = { x: cx, z: cz, d, R: dir ? Math.max(R, 60) : R, es, direct: dir, y: cy === undefined ? null : cy - y0 }; pending.push({ bl, t: d / ((opt && opt.speed) || 260) + Math.random() * 0.3 }); }
     },
     update(dt) {
+      if (dirty) { dirtyT += dt; if (dirtyT > 0.12 || (!collapsing.length && !pending.length)) { posAttr.needsUpdate = true; uvAttr.needsUpdate = true; colAttr.needsUpdate = true; dirty = false; dirtyT = 0; } }
       for (let i = pending.length - 1; i >= 0; i--) {
         const p = pending[i];
         p.t -= dt;
@@ -342,6 +363,7 @@ function buildCity(scene) {
         if (ax >= b.hw + r || az >= b.hd + r || y - r >= b.top || y < y0) continue;
         const px = b.hw + r - ax, pz = b.hd + r - az, py = b.top + r - y;
         const h = _cityHit;
+        h.bx = b.x; h.bz = b.z; h.cut = b.top < b.top0 - 0.5; // (a broken stump: rubble that lands on it should slide off)
         if (py <= px && py <= pz) { h.nx = 0; h.ny = 1; h.nz = 0; h.pen = py; }
         else if (px <= pz) { h.nx = dx < 0 ? -1 : 1; h.ny = 0; h.nz = 0; h.pen = px; }
         else { h.nx = 0; h.ny = 0; h.nz = dz < 0 ? -1 : 1; h.pen = pz; }
@@ -357,6 +379,12 @@ function buildCity(scene) {
       const list = boxes.get(i * nz + j);
       if (list) for (const b of list) if (Math.abs(x - b.x) < b.hw && Math.abs(z - b.z) < b.hd && b.top > top) top = b.top;
       return top;
+    },
+    /** does a sphere touch a building (or the TV tower)? used by the aircraft hit spheres */
+    sphereHit(x, y, z, r) {
+      if (y > y0 + 420) return false;
+      if (this.collide(x, y, z, r)) return true;
+      return Math.hypot(x - C.x - 4, z - C.z - 4) < 8 + r && y < y0 + 340;
     },
     /** true if the point is inside a building (used for crash detection) */
     hit(x, y, z) {

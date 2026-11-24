@@ -7,6 +7,8 @@ function fmtTime(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) 
    ========================================================================== */
 
 const _ca = new THREE.Vector3();
+const _hbp = new THREE.Vector3();
+const _hbv = new THREE.Vector3();
 const _cb = new THREE.Vector3();
 const _cc = new THREE.Vector3();
 const _cd = new THREE.Vector3();
@@ -176,6 +178,8 @@ class FlyMode {
     if (!this.bullets) this.bullets = new BulletSystem(app.scene);
     if (!this.crashFx) this.crashFx = new CrashFX(app);
     this.crashFx.clear();
+    if (!this.nukes) this.nukes = new NukeSystem(app);
+    this.nukes.clear();
     if (app.world.city) app.world.city.reset(); // a new game: the city is rebuilt
     this.bullets.clear();
     app.fx.clear();
@@ -240,6 +244,8 @@ class FlyMode {
     this.recOn = true;
     this.recAcc = 0;
     this.recD = [];
+    this.recWings = [];
+    this.recNukes = [];
     this.recN = 0;
     this.recKind = this.player.heavy ? this.player.spec.key : 'fighter';
     this.recSample();
@@ -257,7 +263,7 @@ class FlyMode {
     if (crash && this.player) this.recSample(); // the very last frame: the moment of impact
     this.recOn = false;
     if (this.recN >= 60) {
-      App.recording = { dt: REC_DT, n: this.recN, d: this.recD, kind: this.recKind, crash: crash || null };
+      App.recording = { dt: REC_DT, n: this.recN, d: this.recD, kind: this.recKind, crash: crash || null, wings: this.recWings || [], nukes: this.recNukes || [] };
       if (typeof ReplayStore !== 'undefined') ReplayStore.saveLatest(App.recording);
       if (App.refreshReplayUI) App.refreshReplayUI();
       if (!silent) this.app.toast(`Recording saved (${fmtTime((this.recN - 1) * REC_DT)}) — watch it from the menu: Replay`, 4200);
@@ -268,6 +274,7 @@ class FlyMode {
   cleanup() {
     const app = this.app;
     this.stopRecording(true);
+    if (this.nukes) this.nukes.clear();
     if (this.crashFx) this.crashFx.clear();
     if (this.streaks) { app.scene.remove(this.streaks.lines); this.streaks.lines.geometry.dispose(); this.streaks.lines.material.dispose(); this.streaks = null; }
     if (this.player) {
@@ -360,12 +367,17 @@ class FlyMode {
     if (!down || this.state !== 'playing') return false;
     switch (code) {
       case 'KeyV':
+        if (this.nukes) this.nukes.cam = null;
         this.camMode = this.camMode === 'chase' ? 'cockpit' : 'chase';
         this.app.camera.near = this.camMode === 'cockpit' ? 0.4 : 2;
         this.app.camera.updateProjectionMatrix();
         return true;
       case 'KeyF':
         this.fireMissile();
+        return true;
+      case 'KeyN':
+        if (this.nukes && this.nukes.cam) this.nukes.cam = null; // N again: back to the cockpit
+        else this.dropNuke();
         return true;
       case 'KeyG':
         if (this.recOn) this.stopRecording(); else this.startRecording();
@@ -433,6 +445,18 @@ class FlyMode {
     const py = jet.pos.y + f.y * 7 + r.y * 1.9 * this.gunSide - 0.3;
     const pz = jet.pos.z + f.z * 7 + r.z * 1.9 * this.gunSide;
     this.bullets.fire(px, py, pz, jet.vel.x + dir.x * BULLET_SPEED, jet.vel.y + dir.y * BULLET_SPEED, jet.vel.z + dir.z * BULLET_SPEED, team, dmg);
+  }
+
+  /** N: drop a nuclear bomb, from any aircraft, anywhere */
+  dropNuke() {
+    const p = this.player;
+    if (this.state !== 'playing' || !p || !p.alive || !this.nukes) return;
+    const bomb = this.nukes.drop(p);
+    if (bomb) {
+      if (this.recOn && this.recNukes) this.recNukes.push({ t: (this.recN - 1) * REC_DT, x: bomb.pos.x, y: bomb.pos.y, z: bomb.pos.z, vx: bomb.vel.x, vy: bomb.vel.y, vz: bomb.vel.z }); // so the replay shows it
+      this.pushMsg('NUKE AWAY', 'N: back to your aircraft  ·  lethal radius 2.6 km', HUD_WARN, 26, 3.6);
+      if (this.app.audio && this.app.audio.ok) this.app.audio.missileLaunch();
+    }
   }
 
   fireMissile() {
@@ -565,12 +589,12 @@ class FlyMode {
     const p = this.player;
     if (this.state !== 'playing') return;
     this.state = 'dead';
-    this.stopRecording(false, { air: reason === 'SHOT DOWN' || reason === 'MID-AIR COLLISION' });
+    this.stopRecording(false, { air: reason === 'SHOT DOWN' || reason === 'MID-AIR COLLISION' || reason === 'NUCLEAR BLAST' });
     this.deadT = 0;
     p.alive = false;
     p.group.visible = false;
     this.deathPos.copy(p.pos);
-    this.crashAircraft(p, reason === 'SHOT DOWN' || reason === 'MID-AIR COLLISION');
+    this.crashAircraft(p, reason === 'SHOT DOWN' || reason === 'MID-AIR COLLISION' || reason === 'NUCLEAR BLAST');
     this.deathR = p.heavy ? 240 + p.spec.scale * 70 : 75; // stand well back from a big fireball
     this.deathReason = reason;
     if (this.own) this.own.stop();
@@ -622,6 +646,56 @@ class FlyMode {
       voice: app.audio && app.audio.ok ? app.audio.addJetVoice(jet) : null, spread: rand(1.0, 2.4) * (1.5 - skill), voiceT: 0,
     };
     this.enemies.push(en);
+  }
+
+  /** which part of this aircraft (if any) is touching the ground, the sea or a building: 'body' | 'wingL' | 'wingR' | null */
+  hitCheck(jet) {
+    const w = this.app.world, city = w.city, q = jet.quat, cur = jet.pos, boxes = hitboxesFor(jet), lost = jet.lost;
+    const prev = jet._hbPrev || (jet._hbPrev = new THREE.Vector3().copy(cur));
+    const dist = prev.distanceTo(cur);
+    // an aircraft at 1000 m/s moves 30+ m a frame: sweep from the old position to the new one so it cannot skip through a wall
+    const steps = dist > 0.5 && dist < 600 ? Math.min(90, Math.ceil(dist / 1.2)) : 1;
+    let res = null;
+    for (let k = 1; k <= steps && !res; k++) {
+      const f = steps === 1 ? 1 : k / steps;
+      _hbp.lerpVectors(prev, cur, f);
+      const gc = w.surfaceAt(_hbp.x, _hbp.z);
+      // the whole aircraft is well clear of the ground and outside the city: nothing to test at this step
+      if (_hbp.y - boxes.rb > gc + 1.7 * boxes.rb + 2 && !(city && city.inside(_hbp.x, _hbp.z, boxes.rb + 20) && _hbp.y < gc + 470)) continue;
+      for (const g of boxes.groups) {
+        _hbv.set(g.x, g.y, g.z).applyQuaternion(q).add(_hbp);
+        const gs = w.surfaceAt(_hbv.x, _hbv.z);
+        const terrainNear = _hbv.y - g.r < gs + 1.7 * g.r + 2;
+        const cityNear = !terrainNear && city && _hbv.y < gs + 470 && city.inside(_hbv.x, _hbv.z, g.r + 10) && (g.r > 12 || city.sphereHit(_hbv.x, _hbv.y, _hbv.z, g.r));
+        if (!terrainNear && !cityNear) continue;
+        for (const i of g.idx) {
+          const s = boxes[i];
+          if (lost && lost[s.part]) continue; // a wing that is gone cannot hit anything
+          _hbv.set(s.x, s.y, s.z).applyQuaternion(q).add(_hbp);
+          if (_hbv.y - s.r < w.surfaceAt(_hbv.x, _hbv.z) || (city && city.sphereHit(_hbv.x, _hbv.y, _hbv.z, s.r))) { res = s.part; break; }
+        }
+        if (res) break;
+      }
+      if (res) cur.copy(_hbp); // the impact happens where it first touched, not where it would have ended up
+    }
+    prev.copy(cur);
+    return res;
+  }
+
+  /** a wing hits something and is torn off: the aircraft survives, but spins out of control */
+  loseWing(jet, side) {
+    const key = side < 0 ? 'wingL' : 'wingR';
+    if (jet.lost && jet.lost[key]) return;
+    jet.lost = jet.lost || {};
+    jet.lost[key] = true;
+    jet.hideWing(side);
+    this.crashFx.wingOff(jet, side);
+    if (jet === this.player && this.recOn && this.recWings) this.recWings.push({ t: (this.recN - 1) * REC_DT, side }); // so the replay shows it
+    jet.dying = true; jet.dyingT = 0; jet.dyingRoll = side; // an aircraft with one wing rolls towards the missing side
+    if (jet === this.player) {
+      this.hitFlash = 1; this.shake = Math.min(2, this.shake + 1.1);
+      this.pushMsg(side < 0 ? 'LEFT WING LOST' : 'RIGHT WING LOST', 'no control', HUD_BAD, 30, 3.2);
+    }
   }
 
   stepEnemy(en, dt) {
@@ -734,6 +808,7 @@ class FlyMode {
     for (const m of this.msgs) m.t += dt;
     this.msgs = this.msgs.filter((m) => m.t < m.life);
     if (this.crashFx) this.crashFx.update(dt);
+    if (this.nukes) this.nukes.update(dt, this);
 
     if (this.state === 'playing') {
       this.timeAlive += dt;
@@ -762,9 +837,11 @@ class FlyMode {
       if (this.missileReload > 9) { this.missileReload = 0; if (this.missiles < 6) this.missiles++; }
       this.updateTargeting(dt);
 
-      // ground / water collision
+      // collision: every part of the aircraft has hit spheres. Body into ground / building = crash; a wing = the wing is torn off
       const g = app.world.surfaceAt(p.pos.x, p.pos.z);
-      if (p.pos.y < g + (p.heavy ? p.spec.crash * p.spec.scale : 4) || app.world.cityHit(p.pos.x, p.pos.y, p.pos.z)) this.playerDie('CRASHED');
+      const hit = this.hitCheck(p);
+      if (hit === 'body') this.playerDie('CRASHED');
+      else if (hit) this.loseWing(p, hit === 'wingL' ? -1 : 1);
       // pull-up warning
       const ah = _ca.copy(p.vdir).multiplyScalar(p.speed * 2.2).add(p.pos);
       const clear = ah.y - app.world.surfaceAt(ah.x, ah.z);
@@ -801,6 +878,11 @@ class FlyMode {
       if (!en.jet.alive) { this.removeEnemy(en); this.enemies.splice(i, 1); continue; }
       if (this.state === 'dead') { en.jet.input.roll = 0; en.jet.input.pitch = 0; }
       this.stepEnemy(en, dt);
+      if (en.jet.alive && !en.jet.dying) {
+        const eh = this.hitCheck(en.jet);
+        if (eh === 'body') this.finishEnemy(en, true);
+        else if (eh) this.loseWing(en.jet, eh === 'wingL' ? -1 : 1);
+      }
       // collision with the player
       if (this.state === 'playing' && p.alive && !en.jet.dying && en.jet.pos.distanceToSquared(p.pos) < 15 * 15) {
         en.jet.hp = 0; en.jet.dying = true; en.jet.dyingT = 3; en.jet.killedByPlayer = false;
@@ -963,6 +1045,12 @@ class FlyMode {
       cam.lookAt(this.deathPos);
       return;
     }
+    if (this.nukes && this.nukes.cam && this.nukes.applyCamera(cam, dt)) { // the bomb camera
+      p.group.visible = true;
+      if (this.shake > 0.002) { cam.position.x += rand(-1, 1) * this.shake; cam.position.y += rand(-1, 1) * this.shake; cam.position.z += rand(-1, 1) * this.shake; }
+      cam.updateMatrixWorld(true);
+      return;
+    }
     let fov;
     if (this.camMode === 'chase') {
       this.camQ.slerp(p.quat, snap ? 1 : 1 - Math.exp(-dt * 7));
@@ -995,7 +1083,7 @@ class FlyMode {
     this.gameOverShown = true;
     const secs = Math.floor(this.timeAlive);
     const mm = Math.floor(secs / 60), ss = String(secs % 60).padStart(2, '0');
-    document.getElementById('go-title').textContent = this.deathReason === 'CRASHED' ? 'You crashed' : this.deathReason === 'MID-AIR COLLISION' ? 'Mid-air collision' : 'Shot down';
+    document.getElementById('go-title').textContent = this.deathReason === 'CRASHED' ? 'You crashed' : this.deathReason === 'MID-AIR COLLISION' ? 'Mid-air collision' : this.deathReason === 'NUCLEAR BLAST' ? 'Caught in the blast' : 'Shot down';
     document.getElementById('go-text').textContent = this.kind === 'dogfight'
       ? `Score ${this.score}\nKills ${this.kills}  ·  Wave ${Math.max(1, this.wave)}\nTime ${mm}:${ss}`
       : `You flew for ${mm}:${ss}`;

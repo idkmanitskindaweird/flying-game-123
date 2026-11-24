@@ -93,12 +93,12 @@ const ReplayStore = {
     const f = new Float32Array(rec.d), u = new Uint8Array(f.buffer);
     let str = '';
     for (let i = 0; i < u.length; i += 0x8000) str += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
-    return { kind: rec.kind || 'fighter', crash: rec.crash || null, n: rec.n, dt: rec.dt, date: Date.now(), b64: btoa(str) };
+    return { kind: rec.kind || 'fighter', crash: rec.crash || null, wings: rec.wings || [], nukes: rec.nukes || [], n: rec.n, dt: rec.dt, date: Date.now(), b64: btoa(str) };
   },
   decode(slot) {
     const str = atob(slot.b64), u = new Uint8Array(str.length);
     for (let i = 0; i < str.length; i++) u[i] = str.charCodeAt(i);
-    return { dt: slot.dt, n: slot.n, d: new Float32Array(u.buffer), kind: slot.kind, crash: slot.crash };
+    return { dt: slot.dt, n: slot.n, d: new Float32Array(u.buffer), kind: slot.kind, crash: slot.crash, wings: slot.wings || [], nukes: slot.nukes || [] };
   },
   save(i, rec) {
     const old = this.slots[i];
@@ -514,6 +514,7 @@ function boot() {
     return;
   }
   App.renderer = renderer;
+  renderer.localClippingEnabled = true; // a broken-off wing is cut away from the model with a clipping plane
   renderer.shadowMap.enabled = !!App.quality.shadows;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;

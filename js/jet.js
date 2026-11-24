@@ -396,6 +396,8 @@ class JetShadow {
    Jet base class
    ========================================================================== */
 
+const _clN = new THREE.Vector3(), _clP = new THREE.Vector3();
+
 class Jet {
   constructor(opts) {
     opts = opts || {};
@@ -451,10 +453,37 @@ class Jet {
     this.history.push(t, this.pos.x, this.pos.y, this.pos.z);
   }
 
+  /** tear a wing off: the model is cut away on that side with a clipping plane that follows the aircraft */
+  hideWing(side) {
+    const b = this.model.body;
+    if (!this.clipMeta) {
+      b.material = b.material.clone(); // (the body material is shared by every jet)
+      b.material.clipShadows = true;
+      b.material.clippingPlanes = [];
+      this.clipMeta = [];
+    }
+    const plane = new THREE.Plane();
+    b.material.clippingPlanes.push(plane);
+    this.clipMeta.push({ plane, side, cut: wingCutFor(this) });
+  }
+
+  /** put every torn-off wing back (replay: going back in time) */
+  restoreWings() {
+    this.lost = null;
+    if (this.clipMeta) { this.model.body.material.clippingPlanes = []; this.clipMeta = null; }
+  }
+
   syncVisual(time) {
     const g = this.group;
     g.position.copy(this.pos);
     g.quaternion.copy(this.quat);
+    if (this.clipMeta) {
+      for (const c of this.clipMeta) {
+        const n = _clN.set(-c.side, 0, 0).applyQuaternion(this.quat);
+        const pt = _clP.set(c.side * c.cut, 0, 0).applyQuaternion(this.quat).add(this.pos);
+        c.plane.setFromNormalAndCoplanarPoint(n, pt);
+      }
+    }
     const m = this.model;
     const ab = this.ab;
     const flick = 0.88 + 0.24 * Math.sin(time * 61 + this.seed) * Math.sin(time * 37.3 + this.seed * 2.1);
@@ -553,7 +582,7 @@ class Aircraft extends Jet {
 
     if (this.dying) {
       this.dyingT += dt;
-      inp.roll = 1; inp.pitch = -0.25; inp.yaw = 0; inp.boost = false; inp.throttle = 0.3;
+      inp.roll = this.dyingRoll !== undefined ? this.dyingRoll : 1; inp.pitch = this.dyingRoll !== undefined ? -1 : -0.25; inp.yaw = 0; inp.boost = false; inp.throttle = 0.3;
       this.damageSmoke = 1;
     }
 
@@ -578,6 +607,7 @@ class Aircraft extends Jet {
     let tp = inp.pitch * pitchCap * auth + stallTerm;
     let tr = inp.roll * (H ? SP.roll : 175) * DEG * (0.3 + 0.7 * lowAuth) * (1 - 0.3 * smoothstep(330 * K, 480 * K, spd));
     let ty = inp.yaw * (H ? SP.yaw : 22) * DEG * auth;
+    if (this.dying && this.dyingRoll !== undefined) tr *= 2.2; // with one wing gone it spins hard towards the missing side
 
     // gentle wings-level assist when the stick is centred
     if (this.assist && !this.dying && Math.abs(inp.roll) < 0.05 && Math.abs(inp.pitch) < 0.15) {
@@ -646,6 +676,7 @@ class Aircraft extends Jet {
     this._lastVdir.copy(this.vdir);
     this.vdir.lerp(fwd, 1 - Math.exp(-align * dt));
     this.vdir.y -= stallF * 0.85 * dt;
+    if (this.dying && this.dyingRoll !== undefined) this.vdir.y -= Math.min(1, this.dyingT / 0.4) * 2.8 * dt; // half the lift is gone: it drops out of the sky
     this.vdir.normalize();
     this.vel.copy(this.vdir).multiplyScalar(spd);
     this.pos.addScaledVector(this.vel, dt);

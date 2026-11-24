@@ -137,6 +137,35 @@ function drawFlightHUD(m, ctx, w, h) {
     hudLine(ctx, pt.x, pt.y - r, pt.x, pt.y - r - 7, HUD_COL, 1.6);
   }
 
+  // ---- nuclear bombsight: where a bomb released now would land -----------------------
+  if (m.nukes && m.state === 'playing' && !m.nukes.cam) {
+    const hit = m.nukes.predict(p);
+    if (hit) {
+      const fl = _hv.copy(p.vel).multiplyScalar(hit.t).add(p.pos); // where YOU will be when it goes off
+      const self = Math.hypot(fl.x - hit.x, fl.y - hit.y, fl.z - hit.z), danger = self < 2600;
+      const col = danger ? HUD_BAD : HUD_WARN;
+      _hv.set(hit.x, hit.y, hit.z);
+      hudProject(cam, _hv, w, h, pt);
+      const rng = Math.hypot(hit.x - p.pos.x, hit.z - p.pos.z);
+      let px = pt.x, py = pt.y, on = pt.front && px > 30 && px < w - 30 && py > 30 && py < h - 30;
+      if (!on) { // off screen: pin it to the edge of the view
+        const ang = pt.front ? Math.atan2(py - h / 2, px - w / 2) : Math.PI / 2;
+        px = clamp(w / 2 + Math.cos(ang) * w, 40, w - 40); py = clamp(h / 2 + Math.sin(ang) * h, 40, h - 40);
+        if (!pt.front) { px = w / 2; py = h - 70; }
+      }
+      const r = 11 * sc + 4;
+      ctx.save();
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(px, py - r); ctx.lineTo(px + r, py); ctx.lineTo(px, py + r); ctx.lineTo(px - r, py); ctx.closePath(); ctx.stroke();
+      hudLine(ctx, px - r - 7, py, px - r + 3, py, col, 2); hudLine(ctx, px + r + 7, py, px + r - 3, py, col, 2);
+      hudLine(ctx, px, py - r - 7, px, py - r + 3, col, 2); hudLine(ctx, px, py + r + 7, px, py + r - 3, col, 2);
+      ctx.restore();
+      hudText(ctx, `NUKE ${fmtRange(rng)}  ${hit.t.toFixed(0)}s`, px, py + r + 22, 12 * sc + 4, col, 'center', 700);
+      if (danger) hudText(ctx, 'DANGER CLOSE', px, py + r + 40, 12 * sc + 4, HUD_BAD, 'center', 700);
+      if (!on) hudText(ctx, pt.front ? '' : 'BEHIND', px, py - r - 12, 11 * sc + 3, col, 'center', 700);
+    }
+  }
+
   // ---- targets -----------------------------------------------------------------------
   const tgt = m.target;
   for (const en of m.enemies) {

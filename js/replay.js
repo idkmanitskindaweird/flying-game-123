@@ -59,6 +59,8 @@ class ReplayMode extends WatchMode {
     this.placing = false;
     this.map = { x: 0, z: 0, h: 3000 };
     this.obsH = 1.7;
+    this.wingN = 0;
+    this.walk = { on: false, vx: 0, vz: 0, speed: 0, ph: 0, x: 0, y: 0, roll: 0, nod: 0 };
     this.pathLine = null;
     this.downAt = null;
     this.scrubbing = false;
@@ -70,7 +72,13 @@ class ReplayMode extends WatchMode {
   get dur() { return this.rec ? (this.rec.n - 1) * this.rec.dt : 0; }
 
   /** a recording that ends in a crash plays on for a while so the wreck can burn and the buildings come down */
-  endTime() { return this.dur + (this.rec && this.rec.crash ? 16 : 0); }
+  /** when the replay ends: a crash plays on for a while, and a recorded nuke plays out fully (the fall, the blast and the cloud) even if the recording stopped before it went off */
+  endTime() {
+    let e = this.dur + (this.rec && this.rec.crash ? 16 : 0);
+    const ns = this.rec && this.rec.nukes;
+    if (ns && ns.length) e = Math.max(e, ns[ns.length - 1].t + 58);
+    return e;
+  }
 
   /* ----- lifecycle --------------------------------------------------------- */
 
@@ -101,6 +109,10 @@ class ReplayMode extends WatchMode {
     this.view.yaw = 0; this.view.pitch = 0.06; this.view.fov = this.userFov = 58;
     app.camera.near = 2;
     app.camera.updateProjectionMatrix();
+    this.walk.on = false;
+    if (!this.nukes) this.nukes = new NukeSystem(app);
+    this.nukes.clear();
+    this.nukeN = 0;
 
     // bounding box of the whole flight
     const d = rec.d;
@@ -154,6 +166,7 @@ class ReplayMode extends WatchMode {
     this.clearJets();
     this.jet = null;
     if (this.crashFx) this.crashFx.clear();
+    if (this.nukes) this.nukes.clear();
     if (app.world.city) app.world.city.reset();
     if (this.pathLine) { app.scene.remove(this.pathLine); this.pathLine.geometry.dispose(); this.pathLine.material.dispose(); this.pathLine = null; }
     document.getElementById('replayui').classList.add('hidden');
@@ -193,6 +206,8 @@ class ReplayMode extends WatchMode {
   seek(rt) {
     const app = this.app;
     this.crashFx.clear();
+    if (this.nukes) this.nukes.clear();
+    { const ns = (this.rec && this.rec.nukes) || []; this.nukeN = 0; while (this.nukeN < ns.length && ns[this.nukeN].t < clamp(rt, 0, this.dur) - 0.05) this.nukeN++; } // bombs already dropped before this moment are not re-shown
     if (app.world.city) app.world.city.reset(); // going back in time: the wreck is gone and the city is whole again
     this.crashed = false;
     this.shakeIn = 0;
@@ -200,6 +215,9 @@ class ReplayMode extends WatchMode {
     this.ensureEntry();
     this.base = app.time - this.rt;
     const jet = this.jet;
+    jet.restoreWings();
+    this.wingN = 0;
+    this.applyWings(false);
     jet.poseAt(this.rec, this.rt);
     jet.seedHistory(this.rec, this.rt, this.base);
     jet.syncVisual(app.time);
@@ -221,6 +239,25 @@ class ReplayMode extends WatchMode {
     this.playing = on;
     this.phase = on ? 'flying' : 'ready';
     this.syncUI();
+  }
+
+  /** wings torn off during the flight: at their recorded time the wing disappears from the aircraft and its pieces fly off */
+  applyWings(fx) {
+    const ws = this.rec && this.rec.wings, jet = this.jet;
+    if (!ws || !jet) return;
+    while (this.wingN < ws.length && ws[this.wingN].t <= this.rt + 1e-6) {
+      const wv = ws[this.wingN++], key = wv.side < 0 ? 'wingL' : 'wingR';
+      if (jet.lost && jet.lost[key]) continue;
+      jet.lost = jet.lost || {};
+      jet.lost[key] = true;
+      jet.hideWing(wv.side);
+      if (fx) {
+        jet.poseAt(this.rec, wv.t);
+        this.crashFx.listener = this.obs;
+        this.crashFx.wingOff(jet, wv.side);
+        jet.poseAt(this.rec, this.rt);
+      }
+    }
   }
 
   /** the recorded aircraft hits something: break it up (the same crash as in flight), seen and heard from where you stand */
@@ -318,6 +355,7 @@ class ReplayMode extends WatchMode {
     sk.addEventListener('change', () => { self.scrubbing = false; sk.blur(); });
     $('r-map').addEventListener('click', () => { self.togglePlacing(); $('r-map').blur(); });
     $('r-under').addEventListener('click', () => { self.standUnderJet(); $('r-under').blur(); });
+    $('r-walk').addEventListener('click', () => { self.toggleWalk(); $('r-walk').blur(); });
     $('r-h').addEventListener('input', () => { self.obsH = parseFloat($('r-h').value); self.setObserver(self.obs.x, self.obs.z); self.syncUI(); });
     $('r-h').addEventListener('change', () => $('r-h').blur());
     $('r-dop').addEventListener('input', () => {
@@ -356,6 +394,9 @@ class ReplayMode extends WatchMode {
     $('r-cam').textContent = 'Camera: ' + (this.camMode === 'ground' ? 'ground' : 'riding jet');
     $('r-map').textContent = this.placing ? 'Back to ground view' : 'Pick spot on map';
     $('r-map').classList.toggle('on', this.placing);
+    $('r-walk').textContent = this.walk.on ? 'Walk mode: ON' : 'Walk mode';
+    $('r-walk').classList.toggle('on', this.walk.on);
+    $('r-h').disabled = this.walk.on;
     this.syncTime();
   }
 
@@ -397,6 +438,8 @@ class ReplayMode extends WatchMode {
         this.map.z += mz * sp;
       }
       if (my) this.map.h = clamp(this.map.h * Math.exp(-my * dt * 1.2), 300, 40000);
+    } else if (this.walk.on) {
+      this.walkStep(dt, mx, mz, fast);
     } else if (mx || mz || my) {
       const v = this.view, sp = (fast ? 260 : 45) * dt;
       const fx = -Math.sin(v.yaw), fz = -Math.cos(v.yaw);
@@ -418,16 +461,26 @@ class ReplayMode extends WatchMode {
         this.finish();
       }
     }
-    if (this.crashed && this.playing) {
+    if (this.playing && this.nukes) { // a recorded nuke: the bomb is released at its recorded time and falls and goes off just as it did
+      const ns = (this.rec && this.rec.nukes) || [];
+      while (this.nukeN < ns.length && ns[this.nukeN].t <= this.rt) {
+        const e = ns[this.nukeN++];
+        this.nukes.spawn(new THREE.Vector3(e.x, e.y, e.z), new THREE.Vector3(e.vx, e.vy, e.vz));
+      }
+      this.nukes.update(dt, this);
+    }
+    if ((this.crashed || this.crashFx.chunks.length || (this.nukes && this.nukes.active)) && this.playing) {
       this.crashFx.update(dt);
       if (this.shakeIn > 0) { this.shakeIn -= dt; if (this.shakeIn <= 0) this.shake = Math.max(this.shake, this.shakeAmt); }
     }
     if (this.jet) {
       const j = this.jet;
       j.poseAt(this.rec, this.rt);
+      if (this.playing) this.applyWings(true);
       if (this.playing) j.recordHistory(t);
+      if (!this.crashed) j.group.visible = !(this.rt > this.dur + 0.3); // the recording is over: the aircraft is gone while a nuke plays out
       j.syncVisual(t);
-      if (this.playing) j.emitTrail(app.fx, dt);
+      if (this.playing && this.rt <= this.dur) j.emitTrail(app.fx, dt);
       this.entries[0].shadow.update(j, app.world);
       if (!this.focus) this.focus = j;
     }
@@ -442,6 +495,7 @@ class ReplayMode extends WatchMode {
     }
 
     this.updateCamera(dt);
+    this.applyWalkCam();
     this.applyShake(dt);
     this.updateDiagram(dt);
 
@@ -470,6 +524,92 @@ class ReplayMode extends WatchMode {
     }
     this.boomFlash = Math.max(0, this.boomFlash - dt);
     this.syncTime();
+  }
+
+  /**
+   * Walking on the ground: a person's pace (3.4 m/s brisk walk, 9 m/s running) with smooth start and stop, slowed uphill, stopped by
+   * the sea, steep cliffs and buildings. The stride sets the head bob, side sway and roll, and each footfall makes a sound.
+   */
+  walkStep(dt, mx, mz, fast) {
+    const W = this.walk, v = this.view, app = this.app, w = app.world, obs = this.obs;
+    this.obsH = 1.7;
+    let wx = 0, wz = 0;
+    if (mx || mz) {
+      const fx = -Math.sin(v.yaw), fz = -Math.cos(v.yaw), rx = Math.cos(v.yaw), rz = -Math.sin(v.yaw);
+      wx = fx * -mz + rx * mx; wz = fz * -mz + rz * mx;
+      const l = Math.hypot(wx, wz) || 1, top = (fast ? 9 : 3.4) * (mz > 0 && !mx ? 0.6 : !mz ? 0.8 : 1); // backwards and sideways are slower
+      wx = (wx / l) * top; wz = (wz / l) * top;
+    }
+    const a = 1 - Math.exp(-dt * (mx || mz ? 5 : 8));
+    W.vx += (wx - W.vx) * a; W.vz += (wz - W.vz) * a;
+    let nx = obs.x + W.vx * dt, nz = obs.z + W.vz * dt;
+    const g0 = w.surfaceAt(obs.x, obs.z), g1 = w.surfaceAt(nx, nz), s0 = Math.hypot(W.vx, W.vz);
+    if (s0 > 0.01) {
+      const slope = (g1 - g0) / (s0 * dt);
+      if (g1 < 0.4 && g0 >= 0.4) { nx = obs.x; nz = obs.z; W.vx = W.vz = 0; } // the sea
+      else if (slope > 0.8) { nx = obs.x; nz = obs.z; W.vx *= 0.2; W.vz *= 0.2; } // too steep to climb
+      else {
+        const k = clamp(1 - Math.max(0, slope - 0.15) * 0.9, 0.35, 1); // slower uphill
+        nx = obs.x + (nx - obs.x) * k; nz = obs.z + (nz - obs.z) * k;
+      }
+    }
+    const city = w.city;
+    if (city && city.collide) {
+      for (let i = 0; i < 3; i++) { // buildings are solid
+        const c = city.collide(nx, w.surfaceAt(nx, nz) + 1.0, nz, 0.45);
+        if (!c || Math.abs(c.ny) > 0.7) break;
+        nx += c.nx * c.pen; nz += c.nz * c.pen;
+      }
+    }
+    const moved = Math.hypot(nx - obs.x, nz - obs.z) / Math.max(dt, 1e-3);
+    W.speed += (moved - W.speed) * (1 - Math.exp(-dt * 10));
+    this.setObserver(nx, nz);
+    // the stride: one unit of phase is one step (alternating feet)
+    const sp = W.speed, stride = 0.62 + 0.12 * sp, before = Math.floor(W.ph);
+    if (sp > 0.15) W.ph += (sp * dt) / stride;
+    if (Math.floor(W.ph) !== before && this.playing && !app.paused && app.audio && app.audio.footstep) {
+      const kind = city && city.inside(nx, nz, 0) ? 'hard' : g1 < 3.5 ? 'sand' : g1 > 140 ? 'hard' : 'grass';
+      app.audio.footstep(kind, 0.7 + sp * 0.2);
+    }
+    const amp = sp > 0.15 ? 0.02 * Math.pow(Math.min(sp, 9), 0.8) : 0, ph = W.ph * TAU, t = app.time;
+    W.y = amp * Math.cos(ph) * 0.5 + 0.003 * Math.sin(t * 1.4); // up and down once per step, plus slow breathing
+    W.x = amp * 0.8 * Math.sin(ph * 0.5); // sways from foot to foot (once per two steps)
+    W.roll = amp * 0.12 * Math.sin(ph * 0.5);
+    W.nod = amp * 0.07 * Math.sin(ph + 0.6);
+  }
+
+  /** put the walking bob on the camera (the listener stays where the person stands) */
+  applyWalkCam() {
+    const W = this.walk;
+    if (!W.on || this.placing || this.camMode === 'ride') return;
+    const cam = this.app.camera, v = this.view;
+    cam.position.x += Math.cos(v.yaw) * W.x;
+    cam.position.z += -Math.sin(v.yaw) * W.x;
+    cam.position.y += W.y;
+    cam.rotation.order = 'YXZ';
+    cam.rotation.x += W.nod;
+    cam.rotation.z = W.roll;
+  }
+
+  toggleWalk() {
+    const W = this.walk;
+    W.on = !W.on;
+    W.vx = W.vz = W.speed = 0;
+    if (W.on) {
+      this.placing = false;
+      this.camMode = 'ground';
+      this.obsH = 1.7;
+      this.setObserver(this.obs.x, this.obs.z);
+      this.app.camera.near = 0.2; // at eye height the ground is closer than the usual 2 m clip distance
+      this.app.camera.updateProjectionMatrix();
+      this.app.toast('Walk mode — G walk mode  ·  WASD fly · Shift run · drag to look · G to stop', 2800);
+    } else {
+      this.app.camera.rotation.z = 0;
+      this.app.camera.near = 2;
+      this.app.camera.updateProjectionMatrix();
+      this.app.toast('Walk mode off', 1200);
+    }
+    this.syncUI();
   }
 
   listenerState() {
@@ -529,6 +669,7 @@ class ReplayMode extends WatchMode {
       case 'KeyC': this.toggleCam(); return true;
       case 'KeyL': this.cfg.labels = !this.cfg.labels; this.syncUI(); return true;
       case 'KeyU': this.standUnderJet(); return true;
+      case 'KeyG': this.toggleWalk(); return true;
     }
     return false;
   }
@@ -544,7 +685,7 @@ class ReplayMode extends WatchMode {
 
   toggleCam() {
     this.camMode = this.camMode === 'ground' ? 'ride' : 'ground';
-    if (this.camMode === 'ride') this.placing = false;
+    if (this.camMode === 'ride') { this.placing = false; if (this.walk.on) this.walk.on = false; }
     this.syncUI();
     this.app.toast(this.camMode === 'ride' ? 'Riding the jet: no relative motion, so no Doppler shift' : 'Ground observer');
   }

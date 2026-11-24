@@ -374,7 +374,7 @@ const PLANES = {
   b2: {
     key: 'b2', name: 'B-2 Spirit', short: 'B-2', build: buildB2Mesh, scale: B2_SCALE,
     // faster than the fighter: dragK makes it very slippery, so it cruises at roughly Mach 2.4 and tops out around Mach 3.2
-    maxMach: 1.5, vmax: 1100, vmin: 46, thrustK: 50, dragK: 0.2, cruise: 0.6, gMul: 2.0, startSpeed: 520,
+    maxMach: 1.5, vmax: 1800, vmin: 46, thrustK: 80, dragK: 0.2, cruise: 0.6, gMul: 2.0, startSpeed: 760,
     roll: 70, yaw: 9, pitchLim: 40, kPitch: 3.6, kRoll: 4.6, kThr: 1.0, auth: [60, 150], stall: [52, 82], align: 0.8,
     hs: 2.0, shadow: [56, 34], chase: [8, 44], cockpit: [1.1, -9.5], crash: 3, tail: 11, radius: 26,
     snd: { w0: 380, w1: 480, wg: 0.25, rg: 0.95, rum: 1.3, rlp: 0.55, peak: 230, spl: -3 }, ownLP: 0.6, // buried engines: a low, quiet-ish roar with little whine

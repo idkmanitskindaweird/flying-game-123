@@ -541,7 +541,7 @@ class AudioEngine {
   }
 
   /** An aircraft crash: explosion, tearing metal, a long scrape, and fuel going up. size ~1 (fighter) .. 3 (jumbo) */
-  crash(rel, size, water) {
+  crash(rel, size, water, skidSecs) {
     if (!this.ok) return;
     // make sure nothing can swallow the crash: wake a suspended context, and undo any leftover fade-out of the effects bus
     this.resume();
@@ -557,7 +557,7 @@ class AudioEngine {
     }
     this.explosion(rel, true);
     this.noiseBurst({ type: 'white', dur: 0.4, gain: 0.9, f0: 2400, f1: 500, q: 0.8, filt: 'bandpass', attack: 0.002, rel }); // metal tearing
-    this.noiseBurst({ type: 'pink', dur: 1.4 + 0.5 * s, gain: 0.8, f0: 950, f1: 190, q: 1.0, filt: 'bandpass', attack: 0.03, delay: 0.06, rel }); // scraping along the ground
+    this.noiseBurst({ type: 'pink', dur: 1.4 + 0.5 * s + (skidSecs || 0), gain: 0.8, f0: 950, f1: 190, q: 1.0, filt: 'bandpass', attack: 0.03, delay: 0.06, rel }); // scraping along the ground (as long as the skid)
     this.tone({ f0: 66, f1: 24, dur: 1.3, gain: 1.0, type: 'sine', attack: 0.004, rel });
     this.noiseBurst({ type: 'brown', dur: 2.6, gain: 1.0, f0: 360, f1: 36, q: 0.5, filt: 'lowpass', attack: 0.05, delay: 0.1, rel });
     for (const d of [0.5, 1.05]) this.later(() => this.explosion(rel, s > 1.2), d * 1000 * (0.8 + Math.random() * 0.4)); // fuel igniting
@@ -600,6 +600,33 @@ class AudioEngine {
     this.noiseBurst({ type: 'pink', dur: 1.2 + 0.6 * s, gain: 0.55 * s, f0: 900, f1: 160, q: 0.9, filt: 'bandpass', attack: 0.05, delay: 0.05, rel });
     this.noiseBurst({ type: 'white', dur: 0.5, gain: 0.3 * s, f0: 4200, f1: 1500, q: 0.7, filt: 'bandpass', attack: 0.004, delay: 0.1, rel }); // glass
     this.tone({ f0: 48, f1: 22, dur: 1.4, gain: 0.7 * s, type: 'sine', attack: 0.05, rel });
+  }
+
+  /** a nuclear detonation heard from rel: the sharp crack of the shock wave, then a deep, long rolling roar */
+  nuke(rel) {
+    if (!this.ok) return;
+    this.noiseBurst({ type: 'white', dur: 0.5, gain: 0.9, f0: 4500, f1: 900, q: 0.6, filt: 'bandpass', attack: 0.002, rel });
+    this.noiseBurst({ type: 'pink', dur: 3.4, gain: 1.5, f0: 1100, f1: 70, q: 0.6, filt: 'bandpass', attack: 0.01, rel });
+    this.noiseBurst({ type: 'brown', dur: 11, gain: 2.0, f0: 300, f1: 24, q: 0.5, filt: 'lowpass', attack: 0.12, rel });
+    this.tone({ f0: 38, f1: 12, dur: 8, gain: 1.3, type: 'sine', attack: 0.06, rel });
+    this.tone({ f0: 62, f1: 20, dur: 5, gain: 0.7, type: 'triangle', attack: 0.05, rel });
+    for (const d of [1.2, 2.6, 4.4, 6.5]) this.later(() => this.noiseBurst({ type: 'brown', dur: 2.2, gain: 0.8, f0: 200, f1: 30, q: 0.5, filt: 'lowpass', attack: 0.05, rel }), d * 1000); // the roar rolling off the hills and the falling buildings
+  }
+
+  /** one footstep (heard from where you stand): kind 'grass' | 'hard' | 'sand'; vigor ~1 walking, ~1.5 running */
+  footstep(kind, vigor) {
+    if (!this.ok) return;
+    const v = clamp(vigor || 1, 0.5, 1.7) * rand(0.85, 1.15);
+    if (kind === 'hard') {
+      this.noiseBurst({ type: 'brown', dur: 0.09, gain: 0.26 * v, f0: rand(800, 1100), f1: 200, q: 0.6, filt: 'lowpass', attack: 0.001 });
+      this.noiseBurst({ type: 'white', dur: 0.035, gain: 0.1 * v, f0: rand(2200, 3200), q: 0.8, filt: 'bandpass', attack: 0.001 });
+    } else if (kind === 'sand') {
+      this.noiseBurst({ type: 'pink', dur: 0.17, gain: 0.13 * v, f0: rand(1000, 1400), f1: 450, q: 0.7, filt: 'bandpass', attack: 0.006 });
+      this.noiseBurst({ type: 'brown', dur: 0.08, gain: 0.1 * v, f0: 380, f1: 120, q: 0.5, filt: 'lowpass', attack: 0.002 });
+    } else {
+      this.noiseBurst({ type: 'brown', dur: 0.1, gain: 0.17 * v, f0: rand(420, 620), f1: 120, q: 0.5, filt: 'lowpass', attack: 0.002 });
+      this.noiseBurst({ type: 'pink', dur: 0.13, gain: 0.05 * v, f0: rand(3000, 4200), q: 0.6, filt: 'highpass', attack: 0.012 });
+    }
   }
 
   /** A heavy chunk of wreckage hitting the ground */
