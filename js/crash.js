@@ -14,6 +14,7 @@ function crashLevel() { return (typeof App !== 'undefined' && App.quality && App
 const PLANE_DIMS = {
   c17: { L: 53, R: 3.3, span: 52, finH: 10, engines: [[9.6, 1], [17.2, 1]] },
   b737: { L: 39.5, R: 1.95, span: 35.8, finH: 6.6, engines: [[5.9, 1]] },
+  b2: { L: 21, R: 2, span: 52.4, finH: 0, engines: [] },
   b747: { L: 70.7, R: 3.25, span: 64.4, finH: 11.6, engines: [[11.8, 1], [24.4, 1]] },
 };
 
@@ -50,6 +51,7 @@ class CrashFX {
     app.scene.add(this.group);
     this.chunks = [];
     this.sites = []; // burning wreck sites
+    this.plumes = []; // long-lived smoke columns rising from wrecks and burning buildings
     this.timers = [];
     this.marks = [];
     this.thudT = 0;
@@ -63,6 +65,7 @@ class CrashFX {
     for (const c of this.chunks) this.dropChunk(c);
     this.chunks.length = 0;
     this.sites.length = 0;
+    this.plumes.length = 0;
     this.timers.length = 0;
     for (const m of this.marks) { this.group.remove(m); m.geometry.dispose(); m.material.dispose(); }
     this.marks.length = 0;
@@ -102,6 +105,21 @@ class CrashFX {
       parts.push({ size: [0.5, 0.5, 0.42], at: [0, -1.6, -4.4], color: 0x1d1f23, round: true, axis: 'x', wheel: true });
       parts.push({ size: [1.2, 1.2, 1.8], at: [0, 0, 8.4], color: 0x2b2d31, round: true });
       this.addShrapnel(parts, 80, 7, [B, D, A, 0x2b2d31]);
+      return parts;
+    }
+    if (spec.key === 'b2') { // a flying wing breaks into wing panels and a blunt centre body, and spills its bombs
+      const top = 0x3b3f45, under = 0x2a2d32;
+      parts.push({ size: [7.5, 2.3, 8], at: [0, 0.2, -4.2], color: top }, { size: [8.5, 2.0, 8], at: [0, 0.1, 3.6], color: under });
+      parts.push({ size: [2.4, 0.9, 3], at: [0, 1.2, -6.4], color: 0x10161d, glass: true });
+      for (const sx of [1, -1]) {
+        parts.push({ size: [7, 0.5, 11], at: [sx * 8.5, 0, 0.5], color: top }, { size: [7, 0.45, 9], at: [sx * 15.5, 0, 2.2], color: top }, { size: [5, 0.4, 5], at: [sx * 21.8, 0, 4.2], color: top });
+        parts.push({ size: [4, 0.3, 2.2], at: [sx * 12, 0, 7.6], color: under }, { size: [3.4, 0.3, 2], at: [sx * 6, 0, 9], color: under });
+        parts.push({ size: [0.9, 0.9, 1.6], at: [sx * 3.4, 0, 3.4], color: 0x3a3d42, round: true });
+        parts.push({ size: [0.6, 0.6, 0.5], at: [sx * 4.2, -2.2, 1.6], color: 0x1f2125, round: true, axis: 'x', wheel: true });
+      }
+      parts.push({ size: [0.6, 0.6, 0.5], at: [0, -2.2, -6.6], color: 0x1f2125, round: true, axis: 'x', wheel: true });
+      for (let i = 0; i < 8; i++) parts.push({ size: [0.7, 0.7, 3.6], at: [rand(-3, 3), -0.6, rand(-3, 3)], color: 0x55595f, round: true, cargo: true }); // bombs
+      this.addShrapnel(parts, 70, 14, [top, under, 0x131518, 0x55595f]);
       return parts;
     }
     const d = PLANE_DIMS[spec.key];
@@ -172,7 +190,8 @@ class CrashFX {
       : new THREE.MeshLambertMaterial({ color: part.color });
     const m = new THREE.Mesh(geo, mat);
     m.scale.setScalar(sc);
-    m.castShadow = m.receiveShadow = true;
+    m.castShadow = !part.shard && Math.max(sx, sy, sz) * sc > 1.2; // thin shards and splinters do not cast shadows: every shadow caster is an extra draw call
+    m.receiveShadow = true;
     this.group.add(m);
     return m;
   }
@@ -198,7 +217,7 @@ class CrashFX {
     } else {
       app.fx.explosion(cx, cy, cz, es, vel.x * 0.25, vel.y * 0.15, vel.z * 0.25);
       // the fireball: a big aircraft (airliner, C-17) gets a much bigger one, with a second eruption
-      const big = !!jet.spec, fb = big ? clamp(es * 1.35, 3.2, 6.2) : 1.7;
+      const big = !!jet.spec, fb = big ? clamp(es * 2.3, 5, 10.5) : 1.7; // airliners and the C-17 get a fireball 3-6x the size of a fighter's
       app.fx.fireball(cx, cy, cz, fb, big);
       w.flash(cx, cy, cz, big ? fb * 0.7 : 1);
       if (big) {
@@ -240,6 +259,18 @@ class CrashFX {
       if (size > bigSize && !part.round) { bigSize = size; biggest = c; }
     }
     this.focusChunk = biggest;
+
+    // 2a. the smoke: a huge black column goes up at once, and a plume keeps feeding it for a minute or more
+    if (!water) {
+      const fxq = app.fx.budget, big = !!jet.spec;
+      const nCol = Math.round((big ? 150 : 70) * fxq);
+      for (let i = 0; i < nCol; i++) {
+        // a column that widens as it climbs: small puffs low down, big billows high up
+        const u = Math.pow(Math.random(), 1.7), a = rand(0, TAU), o = es * (3 + 22 * u) * Math.random();
+        app.fx.bigPuff(cx + Math.cos(a) * o, gh + u * es * 55 + rand(0, 6), cz + Math.sin(a) * o, es * (8 + 26 * u) * rand(0.5, 1.2), 'soot', rand(30, 58), rand(5, 20) * Math.sqrt(es / 1.7) * (0.4 + u));
+      }
+      this.addPlume(cx, gh + 2, cz, es * 54, big ? 110 : 70, 3.4 * fxq, 'soot');
+    }
 
     // 2b. a crash in the city: the shock wave brings the buildings around it down
     if (!water && w.city && w.city.inside(cx, cz, 120) && (!air || cy - gh < 160)) w.city.blast(cx, cz, 70 + 62 * es, es, this);
@@ -311,6 +342,12 @@ class CrashFX {
     if (this.marks.length > 6) { const o = this.marks.shift(); this.group.remove(o); o.geometry.dispose(); o.material.dispose(); }
   }
 
+  /** a long-lived source of billowing smoke */
+  addPlume(x, y, z, size, life, rate, kind) {
+    if (this.plumes.length > 40) this.plumes.shift();
+    this.plumes.push({ x, y, z, size, life, rate, kind: kind || 'soot', t: 0, acc: 0 });
+  }
+
   /** a building starts to collapse: dust, glass, flying concrete, sometimes fire, and the roar of it coming down */
   buildingDown(bl, y0) {
     const app = this.app, fx = app.fx;
@@ -330,8 +367,17 @@ class CrashFX {
     for (let i = 0; i < 16; i++) {
       fx.glow(cx + rand(-1, 1) * bl.hw, y0 + Math.random() * H, cz + rand(-1, 1) * bl.hd, rand(-18, 18), rand(-4, 12), rand(-18, 18), rand(0.5, 1.1), 1.6, 0.6, 0.75, 0.92, 1, 0.85, 0.5);
     }
-    // some of them burn
-    if (Math.random() < 0.4) this.sites.push({ x: cx, y: y0 + H * 0.12, z: cz, t: 0, life: rand(18, 38), size: clamp(0.8 + H / 120, 0.8, 2.4), acc: 0 });
+    // the dust cloud: great pale clouds that swell, rise and drift downwind for half a minute
+    const fq = app.fx.budget;
+    const nd = Math.round(clamp(3 + H / 28, 3, 11) * fq);
+    for (let i = 0; i < nd; i++) {
+      fx.bigPuff(cx + rand(-1, 1) * bl.hw, y0 + rand(0.05, 1) * H, cz + rand(-1, 1) * bl.hd, rand(90, 180) * (0.55 + H / 200), 'dust', rand(22, 42), rand(2, 10));
+    }
+    // some of them burn, and burning buildings send up a column of black smoke
+    if (Math.random() < 0.4) {
+      this.sites.push({ x: cx, y: y0 + H * 0.12, z: cz, t: 0, life: rand(18, 38), size: clamp(0.8 + H / 120, 0.8, 2.4), acc: 0 });
+      this.addPlume(cx, y0 + H * 0.15, cz, 36 + H * 0.42, rand(45, 90), 1.4 * fq, 'soot');
+    }
     // sound (limited so a whole district coming down is a roar, not a thousand voices)
     if (this.collT <= 0) {
       this.collT = 0.2;
@@ -354,7 +400,8 @@ class CrashFX {
     jaggedGeometry(geo, rand(0.1, 0.26)); // broken, uneven edges
     const mat = new THREE.MeshLambertMaterial({ map: this.app.world.city.facadeTex, color });
     const m = new THREE.Mesh(geo, mat);
-    m.castShadow = m.receiveShadow = true;
+    m.castShadow = Math.max(sx, sy, sz) > 5; // only the big blocks cast shadows (each one is an extra draw call)
+    m.receiveShadow = true;
     this.group.add(m);
     return m;
   }
@@ -399,6 +446,8 @@ class CrashFX {
         }
       }
     }
+    // a swelling cloud of dust where each slab lets go
+    for (let i = 0, nn = Math.max(1, Math.round(2 * app.fx.budget)); i < nn; i++) fx.bigPuff(bx + rand(-1, 1) * hw, mid, bz + rand(-1, 1) * hd, rand(55, 120) * (0.6 + hh / 50), 'dust', rand(16, 32), rand(1, 7));
     // dust, glass and a flash where the floors let go
     const n = clamp(5 + Math.round(hh / 5), 5, 14);
     for (let i = 0; i < n; i++) {
@@ -449,6 +498,20 @@ class CrashFX {
       const t = this.timers[i];
       t.t -= dt;
       if (t.t <= 0) { this.timers.splice(i, 1); t.fn(); }
+    }
+
+    // smoke plumes: puffs of smoke fed up from a source, swelling as they rise and leaning downwind
+    for (let i = this.plumes.length - 1; i >= 0; i--) {
+      const p = this.plumes[i];
+      p.t += dt;
+      if (p.t > p.life) { this.plumes.splice(i, 1); continue; }
+      const k = 1 - p.t / p.life; // the fire dies down: fewer, smaller puffs
+      p.acc += dt;
+      const period = 1 / Math.max(0.2, p.rate * (0.35 + 0.65 * k));
+      while (p.acc > period) {
+        p.acc -= period;
+        fx.bigPuff(p.x + rand(-1, 1) * p.size * 0.12, p.y + rand(0, 1) * 6, p.z + rand(-1, 1) * p.size * 0.12, p.size * rand(0.7, 1.25) * (0.5 + 0.5 * k), p.kind, rand(26, 46), rand(5, 13));
+      }
     }
 
     // burning wreck sites
@@ -544,9 +607,11 @@ class CrashFX {
       // fire and smoke trail
       const left = c.burn - c.age;
       c.acc += dt;
-      while (c.acc > c.interval) {
-        c.acc -= c.interval;
-        if (c.water) break;
+      const cfg = 1 / Math.max(0.35, fx.budget); // thinner trails when the frame rate is low
+      const poolFull = fx.smoke.alive > fx.smoke.max * 0.75;
+      while (c.acc > c.interval * cfg * 1.6) {
+        c.acc -= c.interval * cfg * 1.6;
+        if (c.water || poolFull) break;
         const b = clamp(left / c.burn, 0, 1);
         const sm = c.s * (c.rest ? 0.6 : 1);
         if (left > 0) fx.glow(pos.x, pos.y + c.r * 0.5, pos.z, rand(-1.5, 1.5), rand(1, 5), rand(-1.5, 1.5), rand(0.35, 0.8), rand(1.5, 2.6) * sm, rand(4, 7) * sm, 1, rand(0.5, 0.75), rand(0.1, 0.25), 0.85 * (0.4 + 0.6 * b), 0.8);

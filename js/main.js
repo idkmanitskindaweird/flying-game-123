@@ -4,7 +4,7 @@
    ========================================================================== */
 
 const Settings = {
-  data: { volume: 0.8, quality: 'med', gfx: null, units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
+  data: { volume: 0.8, quality: 'med', weather: 'cloudy', hurricane: 'off', gfx: null, units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
   load() {
     try {
       const s = localStorage.getItem('afterburn.settings');
@@ -330,6 +330,8 @@ function syncSettingsUI() {
   $id('s-volume-o').textContent = Math.round(d.volume * 100) + '%';
   syncGfxUI();
   $id('s-units').value = d.units;
+  $id('s-weather').value = d.weather;
+  $id('s-hurricane').value = d.hurricane;
   $id('s-invert').checked = d.invert;
   $id('s-assist').checked = d.assist;
   $id('s-mouse').checked = d.mouse;
@@ -347,6 +349,9 @@ function bindSettings() {
   // when "Advanced graphics" is opened, scroll the settings window so the whole list is in view (it can be taller than a small screen)
   const adv = document.querySelector('details.adv');
   if (adv) adv.addEventListener('toggle', () => { if (adv.open) requestAnimationFrame(() => adv.scrollIntoView({ block: 'nearest', behavior: 'smooth' })); });
+  $id('s-weather').addEventListener('change', () => { d.weather = $id('s-weather').value; Settings.save(); if (App.world) App.world.weather.setMode(d.weather); $id('s-weather').blur(); });
+  $id('s-hurricane').addEventListener('change', () => { d.hurricane = $id('s-hurricane').value; Settings.save(); if (App.world) App.world.weather.setHurricane(d.hurricane === 'on'); $id('s-hurricane').blur(); const hi = d.hurricane === 'on' && App.world.weather.hurricaneInfo(App.camera.position.x, App.camera.position.z);
+    App.toast(hi ? `A hurricane has formed ${(hi.dist / 1000).toFixed(0)} km to the ${hi.name} \u2014 follow the blue marker on screen and the H on the radar` : 'Hurricane removed', 5200); });
   $id('s-units').addEventListener('change', () => { d.units = $id('s-units').value; Settings.save(); });
   for (const [id, key] of [['s-invert', 'invert'], ['s-assist', 'assist'], ['s-mouse', 'mouse']]) {
     $id(id).addEventListener('change', () => { d[key] = $id(id).checked; Settings.save(); $id(id).blur(); });
@@ -443,7 +448,7 @@ function bindMenus() {
         else { App.renderReplays(); App.openModal('replays'); }
         break;
       case 'plane':
-        { const order = ['fighter', 'c17', 'b737', 'b747']; Settings.data.plane = order[(order.indexOf(Settings.data.plane) + 1) % order.length]; }
+        { const order = ['fighter', 'c17', 'b737', 'b747', 'b2']; Settings.data.plane = order[(order.indexOf(Settings.data.plane) + 1) % order.length]; }
         Settings.save();
         App.refreshReplayUI();
         break;
@@ -483,6 +488,7 @@ function frame(now) {
   const ctx = App.hudCtx;
   ctx.clearRect(0, 0, App.w, App.h);
   if (App.mode && App.mode.drawHUD) App.mode.drawHUD(ctx, App.w, App.h);
+  if (App.world && App.world.weather && !App.paused) App.world.weather.drawOverlay(ctx, App.w, App.h);
   if (App.debug) {
     ctx.fillStyle = '#fff';
     ctx.font = '12px monospace';

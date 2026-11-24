@@ -593,6 +593,14 @@ class Aircraft extends Jet {
     this.rates.y += (ty - this.rates.y) * k1;
     this.rates.r += (tr - this.rates.r) * k2;
 
+    // storm turbulence: random jolts
+    if (this.turb > 0.02) {
+      const tb = this.turb * (H ? 0.55 : 1);
+      this.rates.r += rand(-1, 1) * tb * 0.5;
+      this.rates.p += rand(-1, 1) * tb * 0.09;
+      this.rates.y += rand(-1, 1) * tb * 0.04;
+    }
+
     // local rotation: pitch about +X (nose up positive), yaw about +Y (right = negative), roll about +Z (right = negative)
     _w.set(this.rates.p, -this.rates.y, -this.rates.r);
     const ang = _w.length() * dt;
@@ -604,6 +612,15 @@ class Aircraft extends Jet {
 
     // --- throttle & speed ---------------------------------------------------
     let tgt = inp.throttle >= 0 ? inp.throttle : this.cruise;
+    if (H && inp.throttle < 0 && !inp.boost && !inp.brake) {
+      // cruise control for the big aircraft: when you are not touching the throttle the speed is held where you left it
+      if (this.holdSpeed === undefined || this.holdSpeed === null) { this.holdSpeed = spd; this.atI = this.throttle; }
+      const err = this.holdSpeed - spd;
+      const acc = this._atLast === undefined ? 0 : (spd - this._atLast) / Math.max(dt, 1e-3); // damping term: how fast the speed is changing now
+      this._atLast = spd;
+      this.atI = clamp(this.atI + err * 0.0018 * dt, 0.02, 1);
+      tgt = clamp(this.atI + err * 0.0022 - acc * 0.03, 0.02, 1);
+    } else if (H) { this.holdSpeed = null; this._atLast = undefined; }
     if (inp.boost) tgt = 1;
     if (inp.brake) tgt = 0.04;
     this.throttle += (tgt - this.throttle) * (1 - Math.exp(-dt * (H ? SP.kThr : 1.7)));
@@ -613,7 +630,7 @@ class Aircraft extends Jet {
     const thrust = (this.throttle * (H ? SP.thrustK : 12.5 * K * K) + this.ab * 19 * K * K) * (0.3 + 0.7 * Math.pow(rho, 0.8));
     const M = spd / (SPEED_OF_SOUND * this.machScale);
     const cd = 1.15e-4 + (H ? 1.0e-4 : 0.4e-4) * smoothstep(0.9, 1.1, M);
-    let drag = cd * spd * spd * (0.3 + 0.7 * rho);
+    let drag = cd * spd * spd * (0.3 + 0.7 * rho) * (H && SP.dragK ? SP.dragK : 1);
     if (inp.brake) drag += 3.4e-4 * spd * spd;
     const omega = Math.hypot(this.rates.p, this.rates.y);
     const nLoad = (spd * omega) / 9.81;

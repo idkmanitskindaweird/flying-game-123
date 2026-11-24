@@ -571,7 +571,7 @@ class FlyMode {
     p.group.visible = false;
     this.deathPos.copy(p.pos);
     this.crashAircraft(p, reason === 'SHOT DOWN' || reason === 'MID-AIR COLLISION');
-    this.deathR = p.heavy ? 90 + p.spec.scale * 40 : 75;
+    this.deathR = p.heavy ? 240 + p.spec.scale * 70 : 75; // stand well back from a big fireball
     this.deathReason = reason;
     if (this.own) this.own.stop();
     this.own = null;
@@ -738,6 +738,9 @@ class FlyMode {
     if (this.state === 'playing') {
       this.timeAlive += dt;
       const fire = this.readInput(dt);
+      p.turb = app.world.weather ? app.world.weather.turbAt(p.pos) : 0; // thunderstorms buffet the aircraft
+      const wnd = app.world.weather && app.world.weather.windAt(p.pos); // a hurricane's winds carry it around the eye
+      if (wnd) { p.pos.x += wnd.x * dt; p.pos.z += wnd.z * dt; }
       p.step(dt);
       if (this.recOn) {
         this.recAcc += dt;

@@ -120,6 +120,10 @@
         <label class="check"><input type="checkbox" id="g-aa"> Anti-aliasing (smooth edges)</label>
       </details>
       <div class="row"><button class="primary hidden" id="s-apply">Apply graphics (reloads the game)</button></div>
+      <label class="field"><span>Weather</span>
+        <select id="s-weather"><option value="fair">Fair</option><option value="cloudy">Cloudy</option><option value="storm">Stormy (thunderstorms)</option></select></label>
+      <label class="field"><span>Hurricane</span>
+        <select id="s-hurricane"><option value="off">No hurricane</option><option value="on">Add a hurricane</option></select></label>
       <label class="field"><span>Units</span>
         <select id="s-units"><option value="imperial">Knots / feet</option><option value="metric">km/h / metres</option></select></label>
       <label class="check"><input type="checkbox" id="s-invert"> Invert pitch (W = pull up)</label>
@@ -184,6 +188,7 @@
         <option value="c17">C-17 Globemaster III</option>
         <option value="b737">Boeing 737</option>
         <option value="b747">Boeing 747</option>
+        <option value="b2">B-2 Spirit stealth bomber</option>
       </select>
     </div>
 
@@ -326,6 +331,8 @@
 <script src="js/jet.js" charset="utf-8"></script>
 <script src="js/c17.js" charset="utf-8"></script>
 <script src="js/airliners.js" charset="utf-8"></script>
+<script src="js/clouds.js" charset="utf-8"></script>
+<script src="js/weather.js" charset="utf-8"></script>
 <script src="js/audio.js" charset="utf-8"></script>
 <script src="js/flyby.js" charset="utf-8"></script>
 <script src="js/hud.js" charset="utf-8"></script>

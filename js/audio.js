@@ -564,6 +564,34 @@ class AudioEngine {
     this.noiseBurst({ type: 'white', dur: 0.9, gain: 0.3, f0: 3000, f1: 800, q: 0.7, filt: 'bandpass', attack: 0.01, delay: 0.25, rel }); // debris rattling down
   }
 
+  /** Thunder from a lightning strike at relative position rel, d metres away: a sharp crack when close, a long rolling rumble when far */
+  thunder(rel, d) {
+    if (!this.ok) return;
+    const near = clamp(1 - d / 5000, 0, 1);
+    const g = 0.55 / (1 + d / 2500) + 0.12;
+    this.noiseBurst({ type: 'brown', dur: 3.2 + d / 3500, gain: 1.7 * g, f0: 360, f1: 40, q: 0.5, filt: 'lowpass', attack: 0.05 + d / 9000, rel });
+    this.noiseBurst({ type: 'pink', dur: 2.0 + d / 5000, gain: 0.7 * g, f0: 800, f1: 120, q: 0.6, filt: 'lowpass', attack: 0.1, delay: 0.15, rel });
+    if (near > 0) this.noiseBurst({ type: 'white', dur: 0.35, gain: 3.2 * near * near, f0: 1600, filt: 'highpass', attack: 0.0004, rel }); // the crack
+    this.tone({ f0: 55, f1: 24, dur: 2.2, gain: 0.5 * g, type: 'sine', attack: 0.12, delay: 0.1, rel });
+  }
+
+  /** the steady hiss of rain: level 0..1 (0 = silent) */
+  setRain(level) {
+    if (!this.ok) return;
+    if (!this._rain) {
+      const ctx = this.ctx, src = ctx.createBufferSource();
+      src.buffer = this.noise.white; src.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3200; bp.Q.value = 0.5;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 7000;
+      const gn = ctx.createGain(); gn.gain.value = 0;
+      src.connect(bp); bp.connect(lp); lp.connect(gn); gn.connect(this.sfx);
+      src.start();
+      this._rain = { gn };
+    }
+    const now = this.ctx.currentTime;
+    this._rain.gn.gain.setTargetAtTime(level * level * 0.32, now, 0.4);
+  }
+
   /** A building coming down: a deep rumble, grinding concrete and a crash of glass. size ~0.4 (house) .. 2 (tower) */
   collapse(rel, size) {
     if (!this.ok) return;

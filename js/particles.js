@@ -23,6 +23,7 @@ class ParticleSystem {
     this.c1 = new Float32Array(max * 4);
     this.drag = new Float32Array(max);
     this.buoy = new Float32Array(max);
+    this.windK = 0; this.wx = 0; this.wz = 0; // wind: velocities relax towards (wx, wz) at the particle's drag rate
     this.ext = new Uint8Array(max); // 1 = driven from outside (a fireball simulation writes these particles itself)
 
     const geo = new THREE.BufferGeometry();
@@ -34,20 +35,24 @@ class ParticleSystem {
     geo.setAttribute('psize', this.sizAttr);
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e9);
 
-    this.uniforms = { uScale: { value: 800 } };
+    this.uniforms = { uScale: { value: 800 }, uMaxPx: { value: 700 } }; // uMaxPx: biggest a sprite may get on screen (huge sprites are what costs fill-rate)
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
       vertexShader: `
         attribute vec4 pcolor;
         attribute float psize;
         uniform float uScale;
+        uniform float uMaxPx;
         varying vec4 vColor;
         void main() {
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           float dist = max(-mv.z, 1.0);
           vColor = pcolor;
-          vColor.a *= smoothstep(5.0, 40.0, dist);
-          gl_PointSize = min(psize * uScale / dist, 700.0);
+          // fade out puffs that are close to the camera compared with their size: they would fill the whole screen (the costliest case)
+          vColor.a *= smoothstep(5.0, 40.0, dist) * smoothstep(psize * 0.15, psize * 0.6, dist);
+          float px = psize * uScale / dist;
+          vColor.a *= 1.0 - smoothstep(uMaxPx, uMaxPx * 1.6, px); // too big on screen: fade out instead of drawing a screen-sized sprite
+          gl_PointSize = min(px, uMaxPx);
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
@@ -139,9 +144,10 @@ class ParticleSystem {
       const i3 = i * 3, i4 = i * 4;
       const t = age / life;
       const dk = Math.exp(-this.drag[i] * dt);
-      this.vel[i3] *= dk;
+      const wk = this.windK * (1 - dk);
+      this.vel[i3] = this.vel[i3] * dk + this.wx * wk;
       this.vel[i3 + 1] = this.vel[i3 + 1] * dk + this.buoy[i] * dt;
-      this.vel[i3 + 2] *= dk;
+      this.vel[i3 + 2] = this.vel[i3 + 2] * dk + this.wz * wk;
       this.pos[i3] += this.vel[i3] * dt;
       this.pos[i3 + 1] += this.vel[i3 + 1] * dt;
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
@@ -173,14 +179,32 @@ class Effects {
     this._v = { x: 0, y: 0, z: 0 };
     this._c0 = [0, 0, 0, 0];
     this._c1 = [0, 0, 0, 0];
+    // big, long-lived smoke and dust clouds get their own pool, so the short-lived puffs of burning debris cannot overwrite them
+    this.big = new ParticleSystem(scene, Math.max(700, Math.floor(quality.particles * 0.4)), false);
+    for (const ps of [this.smoke, this.big]) { ps.windK = 1; ps.wx = 4.5; ps.wz = 1.8; } // a light breeze carries smoke downwind
+    this.smoke.uniforms.uMaxPx.value = 520;
+    this.big.uniforms.uMaxPx.value = 380;
     this.sims = []; // running fireball simulations
     this.ground = null; // (x, z) => ground height; set once the world exists
-    this.budget = clamp(quality.particles / 4500, 0.5, 2.2); // scales how many gas parcels a fireball uses
+    this.budgetBase = clamp(quality.particles / 4500, 0.5, 2.2);
+    this.budget = this.budgetBase; // scales how many gas parcels a fireball uses, and how much smoke a crash makes (the frame-rate governor turns it down when the game runs slowly)
+  }
+
+  /** frame-rate governor: when the game runs slowly, new smoke and fire are made thinner; it recovers once the frame rate does */
+  govern(dt) {
+    this._gt = (this._gt || 0) + dt;
+    if (this._gt < 0.6) return;
+    this._gt = 0;
+    const fps = (typeof App !== 'undefined' && App.fps) || 60;
+    if (fps < 40) this.budget = Math.max(0.3, this.budget * 0.8);
+    else if (fps > 54) this.budget = Math.min(this.budgetBase, this.budget * 1.08);
   }
 
   update(dt, camera, h) {
+    this.govern(dt);
     for (let i = this.sims.length - 1; i >= 0; i--) if (!this.sims[i].update(dt)) this.sims.splice(i, 1);
     this.smoke.update(dt, camera, h);
+    this.big.update(dt, camera, h);
     this.fire.update(dt, camera, h);
   }
 
@@ -188,6 +212,7 @@ class Effects {
     for (const s of this.sims) s.kill();
     this.sims.length = 0;
     this.smoke.clear();
+    this.big.clear();
     this.fire.clear();
   }
 
@@ -209,6 +234,23 @@ class Effects {
     c0[0] = r; c0[1] = g; c0[2] = b; c0[3] = a;
     c1[0] = r * 0.55; c1[1] = g * 0.25; c1[2] = b * 0.1; c1[3] = 0;
     this.fire.emit(p, v, life, s0, s1, c0, c1, drag === undefined ? 1.2 : drag, 0);
+  }
+
+  /**
+   * One big billowing smoke or dust puff that rises, drifts downwind and swells to `size` metres across.
+   * kind 'soot': black smoke from fires; 'dust': pale grey-brown dust from collapsing buildings. vy: initial upward speed.
+   */
+  bigPuff(x, y, z, size, kind, life, vy) {
+    const soot = kind === 'soot';
+    const sh = soot ? rand(0.035, 0.11) : rand(0.5, 0.64);
+    const end = soot ? rand(0.26, 0.38) : rand(0.5, 0.6);
+    const c0 = this._c0, c1 = this._c1;
+    c0[0] = sh; c0[1] = sh * 0.97; c0[2] = sh * 0.92; c0[3] = soot ? 0.3 : 0.4; // fairly transparent: it is the overlap of hundreds of puffs that builds the dense billowing cloud
+    c1[0] = end; c1[1] = end; c1[2] = end * 1.03; c1[3] = 0;
+    const p = this._p, v = this._v;
+    p.x = x; p.y = y; p.z = z;
+    v.x = rand(-4, 4); v.y = vy === undefined ? rand(2, 7) : vy; v.z = rand(-4, 4);
+    this.big.emit(p, v, life, size * 0.22, size, c0, c1, 0.1, soot ? 1.0 : 0.3);
   }
 
   /** glowing blob that can also rise (buoy) - used for fireballs */

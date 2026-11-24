@@ -170,32 +170,38 @@ function makeWaterNormalTexture() {
 }
 
 function makeCloudTextures(count) {
+  // cumulus: dozens of overlapping soft puffs with a flat shaded base, lit from the upper left; the last textures are low wide stratus
   const out = [];
   for (let n = 0; n < count; n++) {
-    const S = 128;
+    const S = 256;
     const [cv, g] = makeCanvas(S, S);
     const rnd = mulberry32(900 + n * 17);
-    for (let i = 0; i < 16; i++) {
-      const x = 64 + (rnd() - 0.5) * 56;
-      const y = 66 + (rnd() - 0.5) * 30 - Math.abs(x - 64) * 0.18;
-      const r = 16 + rnd() * 22;
-      const grad = g.createRadialGradient(x, y, 0, x, y, r);
-      grad.addColorStop(0, 'rgba(255,255,255,0.5)');
-      grad.addColorStop(0.55, 'rgba(255,255,255,0.22)');
-      grad.addColorStop(1, 'rgba(255,255,255,0)');
-      g.fillStyle = grad;
-      g.beginPath();
-      g.arc(x, y, r, 0, TAU);
-      g.fill();
+    const stratus = n >= count - 2;
+    const puffs = stratus ? 30 : 44;
+    for (let i = 0; i < puffs; i++) {
+      let x, y, r;
+      if (stratus) { x = 128 + (rnd() - 0.5) * 210; y = 132 + (rnd() - 0.5) * 34; r = 20 + rnd() * 26; }
+      else {
+        const a = rnd() * TAU, d = Math.pow(rnd(), 0.65) * 70;
+        x = 128 + Math.cos(a) * d * 1.25;
+        y = 150 + Math.sin(a) * d * 0.75 - Math.pow(1 - Math.abs(x - 128) / 110, 1.4) * 38; // domed top, flatter base
+        r = 20 + rnd() * 30;
+      }
+      const gr = g.createRadialGradient(x - r * 0.25, y - r * 0.3, r * 0.05, x, y, r);
+      gr.addColorStop(0, 'rgba(255,255,255,0.97)');
+      gr.addColorStop(0.5, 'rgba(238,243,250,0.62)');
+      gr.addColorStop(0.85, 'rgba(190,204,224,0.28)');
+      gr.addColorStop(1, 'rgba(176,190,212,0)');
+      g.fillStyle = gr;
+      g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
     }
     g.globalCompositeOperation = 'source-atop';
-    const lg = g.createLinearGradient(0, 38, 0, 100);
+    const lg = g.createLinearGradient(0, stratus ? 100 : 90, 0, stratus ? 170 : 210);
     lg.addColorStop(0, 'rgba(255,255,255,0)');
-    lg.addColorStop(1, 'rgba(112,128,158,0.6)');
+    lg.addColorStop(1, stratus ? 'rgba(120,136,164,0.45)' : 'rgba(96,112,144,0.62)');
     g.fillStyle = lg;
     g.fillRect(0, 0, S, S);
-    const tex = new THREE.CanvasTexture(cv);
-    out.push(tex);
+    out.push(new THREE.CanvasTexture(cv));
   }
   return out;
 }
@@ -647,32 +653,60 @@ class Clouds {
   constructor(scene, quality) {
     this.cell = 3800;
     this.W = 12;
-    this.texs = makeCloudTextures(4);
+    this.texs = makeCumulusTextures(['cu', 'cu', 'cu', 'cu', 'st', 'st']);
     this.slots = [];
+    this.coverage = 0.85;
+    this.tint = 1;
+    this.inside = 0; // 0..1: how deep inside a cloud the camera is
     const slotCount = this.W * this.W;
     const wantClusters = quality.clouds;
-    const prob = Math.min(0.9, wantClusters / slotCount);
+    const prob = Math.min(0.95, (wantClusters / slotCount) * 1.25);
     this.group = new THREE.Group();
     scene.add(this.group);
+    const sunH = Math.hypot(SUN_DIR.x, SUN_DIR.z) || 1, sunX = SUN_DIR.x / sunH, sunZ = SUN_DIR.z / sunH;
     for (let j = 0; j < this.W; j++) {
       for (let i = 0; i < this.W; i++) {
         if (hash2(i, j, 11) > prob) continue;
         const grp = new THREE.Group();
-        const mat = new THREE.SpriteMaterial({ map: this.texs[Math.floor(hash2(i, j, 12) * 4)], transparent: true, depthWrite: false, opacity: 0.95 });
-        const n = 5 + Math.floor(hash2(i, j, 13) * 4);
-        const base = 520 + hash2(i, j, 14) * 520;
+        const stratus = hash2(i, j, 19) > 0.8;
+        const tex = stratus ? this.texs[4 + Math.floor(hash2(i, j, 12) * 2)] : this.texs[Math.floor(hash2(i, j, 12) * 4)];
+        const mat = makeCloudMaterial(tex);
+        const n = stratus ? 7 : 12 + Math.floor(hash2(i, j, 13) * 6);
+        const base = (stratus ? 900 : 520) + hash2(i, j, 14) * (stratus ? 700 : 620);
+        const puffs = [];
+        let minY = 1e9, maxY = -1e9;
         for (let k = 0; k < n; k++) {
-          const sp = new THREE.Sprite(mat);
-          const a = hash2(i, j, 20 + k) * TAU, rr = hash2(i, j, 40 + k) * base * 0.9;
-          const sz = base * (0.8 + hash2(i, j, 60 + k) * 0.9);
-          sp.position.set(Math.cos(a) * rr, (hash2(i, j, 80 + k) - 0.35) * base * 0.22, Math.sin(a) * rr);
-          sp.scale.set(sz * 1.6, sz, 1);
-          grp.add(sp);
+          const a = hash2(i, j, 20 + k) * TAU, rr = hash2(i, j, 40 + k) * base * (stratus ? 1.3 : 0.95);
+          const sz = base * (0.6 + hash2(i, j, 60 + k) * 0.9) * (stratus ? 1.1 : 1);
+          // the middle of a cumulus is taller than its edges
+          const lift = stratus ? 0 : (1 - rr / (base * 0.95 + 1)) * base * 0.4;
+          const x = Math.cos(a) * rr, z = Math.sin(a) * rr, y = (hash2(i, j, 80 + k) - 0.35) * base * 0.22 + lift;
+          puffs.push({ x, y, z, sx: sz * (stratus ? 2.4 : 1.5), sy: sz * (stratus ? 0.7 : 1.05), rot: (hash2(i, j, 100 + k) - 0.5) * 0.35 });
+          minY = Math.min(minY, y); maxY = Math.max(maxY, y);
         }
+        // smaller satellite puffs bubbling out from the silhouette make the cloud edge fluffy and irregular
+        if (!stratus) {
+          const main = puffs.length;
+          for (let k = 0; k < Math.round(main * 0.7); k++) {
+            const par = puffs[Math.floor(hash2(i, j, 140 + k) * main)];
+            const ang = hash2(i, j, 160 + k) * TAU, sz2 = Math.min(par.sx, par.sy * 1.5) * (0.28 + hash2(i, j, 180 + k) * 0.22);
+            const rr2 = Math.min(par.sx, par.sy * 1.5) * 0.42;
+            puffs.push({ x: par.x + Math.cos(ang) * rr2, y: par.y + Math.abs(Math.sin(ang)) * rr2 * 0.9, z: par.z + Math.sin(ang) * rr2 * 0.8, sx: sz2 * 1.5, sy: sz2 * 1.1, rot: (hash2(i, j, 200 + k) - 0.5) * 0.5 });
+            maxY = Math.max(maxY, puffs[puffs.length - 1].y);
+          }
+        }
+        // shading: lighter on top and on the side facing the sun, darker underneath and on the far side
+        for (const p of puffs) {
+          const hf = maxY > minY ? (p.y - minY) / (maxY - minY) : 0.5;
+          const rl = Math.hypot(p.x, p.z) + 1e-3;
+          const side = (p.x / rl * sunX + p.z / rl * sunZ) * Math.min(1, rl / (base * 0.6));
+          p.shade = clamp(0.64 + 0.3 * hf + 0.16 * side * (1 - 0.4 * hf), 0.5, 1.12);
+        }
+        grp.add(buildPuffMesh(puffs, mat));
         grp.userData = {
           i, j, mat,
-          jx: hash2(i, j, 15), jz: hash2(i, j, 16),
-          alt: 1700 + hash2(i, j, 17) * 1000,
+          jx: hash2(i, j, 15), jz: hash2(i, j, 16), h2: hash2(i, j, 18),
+          alt: (stratus ? 1400 : 1700) + hash2(i, j, 17) * 1000,
           r: base * 1.5,
           cx: 1e9, cz: 1e9,
         };
@@ -682,9 +716,15 @@ class Clouds {
     }
   }
 
+  /** 0..1: how much of the sky has cloud (fair weather = few clouds) */
+  setCoverage(c) { this.coverage = c; }
+  /** brightness of the cloud tops: storm weather makes the ordinary clouds greyer */
+  setTint(t) { this.tint = t; for (const g of this.slots) g.userData.mat.uniforms.uTint.value.setScalar(t); }
+
   update(cam) {
     const cell = this.cell, W = this.W;
     const ccx = cam.x / cell, ccz = cam.z / cell;
+    let inside = 0;
     for (const grp of this.slots) {
       const u = grp.userData;
       const wi = u.i + W * Math.round((ccx - u.i) / W);
@@ -695,9 +735,12 @@ class Clouds {
       }
       const dx = grp.position.x - cam.x, dz = grp.position.z - cam.z, dy = grp.position.y - cam.y;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      u.mat.opacity = 0.95 * smoothstep(u.r * 0.25, u.r * 1.1, d);
-      grp.visible = u.mat.opacity > 0.01;
+      u.mat.uniforms.uOpacity.value = 0.95 * smoothstep(u.r * 0.25, u.r * 1.1, d);
+      grp.visible = u.mat.uniforms.uOpacity.value > 0.01 && u.h2 < this.coverage;
+      // flying into the body of a cloud turns the world into a pale white-out
+      if (grp.visible && d < u.r * 0.5 && Math.abs(dy) < u.r * 0.28) inside = Math.max(inside, 1 - d / (u.r * 0.5));
     }
+    this.inside += (inside - this.inside) * 0.18;
   }
 }
 
@@ -814,7 +857,7 @@ function addParkedJets(g) {
     g.add(c.group);
   }
   // airliners parked on the grass either side of the apron
-  for (const [kind, x, z, rot] of [['b747', -640, 235, -0.45], ['b737', 740, 300, 0.35]]) {
+  for (const [kind, x, z, rot] of [['b747', -640, 235, -0.45], ['b737', 740, 300, 0.35], ['b2', -880, 190, 0.22]]) {
     const sp = PLANES[kind], a = sp.build(true);
     a.lights.strobe.visible = false;
     a.group.position.set(x, PLAIN_H + a.gearBottom * sp.scale, z);
@@ -894,6 +937,7 @@ class World {
     this.clouds = new Clouds(scene, quality);
     this.airfield = buildAirfield(scene);
     this.city = buildCity(scene);
+    this.weather = new Weather(scene, this, quality); // storms: thunderheads, rain, lightning (see weather.js)
     for (const root of [this.airfield, this.city.group]) {
       root.traverse((o) => { if (o.isMesh) { o.castShadow = o !== this.city.ground; o.receiveShadow = true; } });
     }
@@ -967,5 +1011,7 @@ class World {
     this.water.position.set(p.x, 0, p.z);
     this.waveTex.offset.set(p.x / 150 + this.time * 0.006, -p.z / 150 + this.time * 0.004);
     this.clouds.update(p);
+    this.camPos = p;
+    this.weather.update(dt, p);
   }
 }

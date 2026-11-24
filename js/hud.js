@@ -354,6 +354,22 @@ function drawRadar(m, ctx, x, y, size) {
       ctx.fillRect(sx - 3, sy + (above > 0 ? -8 : 6), 6, 2);
     }
   }
+  // the hurricane: a blue swirl on the rim of the radar, in the direction it lies
+  const wxr = m.app.world && m.app.world.weather;
+  if (wxr && wxr.hurricane) {
+    const hu = wxr.hurricane;
+    const dx = hu.x - p.pos.x, dz = hu.z - p.pos.z;
+    const c = Math.cos(hdg), s = Math.sin(hdg);
+    let px = (dx * c + dz * s) / RANGE, py = -(dx * s - dz * c) / RANGE;
+    const len = Math.hypot(px, py);
+    if (len > 0.86) { px *= 0.86 / len; py *= 0.86 / len; }
+    const sx = cx + px * R, sy = cy + py * R;
+    ctx.strokeStyle = '#7fd8ff'; ctx.fillStyle = '#7fd8ff'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, 7, 0.4, TAU - 0.9); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx, sy, 3, 0, TAU); ctx.fill();
+    ctx.font = '700 10px "Segoe UI", system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('H', sx, sy - 11);
+  }
   // player
   ctx.fillStyle = HUD_COL;
   ctx.beginPath();

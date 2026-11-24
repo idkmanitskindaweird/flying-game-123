@@ -65,7 +65,7 @@ class FireballSim {
   add(x, y, z, vx, vy, vz, T, r) {
     const f = this.fx.fire.alloc();
     if (f < 0) return;
-    this.p.push({ x, y, z, vx, vy, vz, T, r, f, s: -1, ph: Math.random() * TAU, ph2: Math.random() * TAU });
+    this.p.push({ x, y, z, vx, vy, vz, T, r, f, s: -1, ph: Math.random() * TAU, ph2: Math.random() * TAU, sz: rand(0.35, 1.25) });
   }
 
   kill() {
@@ -167,9 +167,9 @@ class FireballSim {
         const sp2 = fx.smoke, s3 = q.s * 3, s4 = q.s * 4;
         const dark = 0.05 + 0.1 * clamp(q.T * 2, 0, 1);
         sp2.pos[s3] = q.x; sp2.pos[s3 + 1] = q.y; sp2.pos[s3 + 2] = q.z;
-        sp2.siz[q.s] = q.r * 2.9 * (1 + 0.5 * age);
+        sp2.siz[q.s] = q.r * 2.9 * q.sz * (1 + 0.5 * age);
         sp2.col[s4] = dark; sp2.col[s4 + 1] = dark * 0.95; sp2.col[s4 + 2] = dark * 0.9;
-        sp2.col[s4 + 3] = clamp((0.48 - q.T) / 0.3, 0, 1) * 0.75 * (1 - clamp((age - 0.55) / 0.45, 0, 1));
+        sp2.col[s4 + 3] = clamp((0.48 - q.T) / 0.3, 0, 1) * 0.07 * (1 - clamp((age - 0.4) / 0.5, 0, 1)); // each parcel is thin; the dense cap comes from hundreds overlapping
       }
     }
 
