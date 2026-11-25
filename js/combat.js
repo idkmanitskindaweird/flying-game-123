@@ -651,7 +651,21 @@ class FlyMode {
   /** which part of this aircraft (if any) is touching the ground, the sea or a building: 'body' | 'wingL' | 'wingR' | null */
   hitCheck(jet) {
     if (typeof hitboxesFor === 'undefined') { // (an old cached page without hitbox.js: fall back to a simple centre-point check rather than failing every frame)
-      if (!App._staleWarned) { App._staleWarned = true; this.app.toast('Your browser is showing an OLD copy of the game (wings and nukes will not work properly). Press Ctrl+F5 to reload it.', 12000); }
+      if (!App._staleWarned) {
+        App._staleWarned = true;
+        // first try to fix it by itself: reload once with a unique address, which cannot come from the cache
+        let tried = false;
+        try { tried = sessionStorage.getItem('selfHeal') === '1'; sessionStorage.setItem('selfHeal', '1'); } catch (e) { tried = true; }
+        if (!tried && typeof location !== 'undefined' && location.protocol !== 'file:') { location.replace(location.pathname + '?r=' + Date.now()); return null; }
+        // it did not help: say what is wrong (was hitbox.js asked for, and did it fail?)
+        let why = 'hitbox.js was not requested by this page (an old copy of the page)';
+        try {
+          const got = performance.getEntriesByType('resource').some((r) => /hitbox\.js/.test(r.name));
+          const errs = (window.__errs || []).filter((x) => /hitbox/.test(x));
+          if (got) why = errs.length ? 'hitbox.js failed: ' + errs[0] : 'hitbox.js was loaded but did not run';
+        } catch (e) { /* ignore */ }
+        this.app.toast('Wings and nukes will not work properly: ' + why + '. Press Ctrl+F5.', 15000);
+      }
       const w0 = this.app.world;
       return jet.pos.y < w0.surfaceAt(jet.pos.x, jet.pos.z) + (jet.heavy ? jet.spec.crash * jet.spec.scale : 4) || w0.cityHit(jet.pos.x, jet.pos.y, jet.pos.z) ? 'body' : null;
     }

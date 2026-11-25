@@ -11,6 +11,8 @@
    it asks version.json (never cached) which build is current and reloads itself ONCE with a fresh copy, so nobody ever has to clear
    their cache. The scripts below are loaded with ?v=BUILD so they always match this page. */
 var BUILD = '20261125b';
+window.__errs = []; // script errors, so the game can say what went wrong if a file fails to load
+window.addEventListener('error', function (e) { window.__errs.push(String(e.filename || '').split('/').pop() + ':' + e.lineno + ' ' + e.message); });
 (function () {
   if (location.protocol === 'file:') return; // opened straight from the folder: nothing is cached
   try {
@@ -47,7 +49,7 @@ if (!window.__redirecting) document.write('<link rel="stylesheet" href="css/styl
   <div id="menu" class="screen hidden">
     <div class="menu-inner">
       <div class="brand">
-        <div class="logo">AFTERT</div>
+        <div class="logo">AFTERB</div>
         <div class="tagline">Fly fighter jets. Or just watch them roar past &mdash; and hear the Doppler effect.</div>
       </div>
       <div class="menu-buttons">
