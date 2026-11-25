@@ -21,16 +21,38 @@ function hitboxesFor(jet) {
   const quick = _hbSimple(jet);
   _hbGroup(quick);
   _hbCache[key] = quick; // a coarse hitbox at once...
-  const build = () => { // ...and the detailed one, built from the real model, a moment later (so the start of a flight never stalls on it)
+  const finish = (out) => { if (out && out.length >= 8) { _hbGroup(out); _hbCache[key] = out; } };
+  if (typeof setTimeout === 'function' && !jet._hbNow) {
+    // ...and the detailed one, built from the real model in small slices over the next frames (a slow computer never stalls on it)
+    setTimeout(() => {
+      let g;
+      try { g = _hbGen(jet, key); } catch (e) { return; }
+      const step = () => {
+        let r;
+        try { r = g.next(); } catch (e) { return; }
+        if (r.done) finish(r.value); else setTimeout(step, 6);
+      };
+      step();
+    }, 700);
+  } else {
     let out = null;
     try { out = _hbFromMesh(jet, key); } catch (e) { out = null; }
-    if (out && out.length >= 8) { _hbGroup(out); _hbCache[key] = out; }
-  };
-  if (typeof setTimeout === 'function' && !jet._hbNow) setTimeout(build, 900); else build();
+    finish(out);
+  }
   return quick;
 }
 
+/** runs the generator to the end at once */
 function _hbFromMesh(jet, key) {
+  const g = _hbGen(jet, key);
+  let r;
+  do { r = g.next(); } while (!r.done);
+  return r.value;
+}
+
+/** the real work: a generator that hands control back every few milliseconds, so it can be spread over many frames on a slow computer */
+function* _hbGen(jet, key) {
+  let _hy = performance.now();
   const group = jet.group, model = jet.model;
   const spec = jet.spec;
   const gsm = new THREE.Matrix4().makeScale(group.scale.x, group.scale.y, group.scale.z);
@@ -65,6 +87,7 @@ function _hbFromMesh(jet, key) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const vox = new Map(), step = cell * 0.7;
     for (let t = 0; t < tris.length; t += 9) {
+      if (performance.now() - _hy > 4) { yield; _hy = performance.now(); }
       const ax = tris[t], ay = tris[t + 1], az = tris[t + 2], bx = tris[t + 3], by = tris[t + 4], bz = tris[t + 5], cx = tris[t + 6], cy = tris[t + 7], cz = tris[t + 8];
       const e = Math.max(Math.hypot(bx - ax, by - ay, bz - az), Math.hypot(cx - ax, cy - ay, cz - az), Math.hypot(cx - bx, cy - by, cz - bz));
       const n = Math.min(40, Math.max(1, Math.ceil(e / step)));

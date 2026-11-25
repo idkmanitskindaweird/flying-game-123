@@ -561,6 +561,12 @@ function boot() {
   ReplayStore.load();
   App.recording = ReplayStore.loadLatest(); // your last flight survives a refresh
   App.refreshReplayUI();
+  // warm-up: the first time free flight starts, the graphics driver compiles a batch of new shaders and uploads textures (seconds on a slow
+  // computer). Do that now, behind the loading screen, so the first real flight does not freeze.
+  try {
+    App.startMode('free');
+    for (let i = 0; i < 3; i++) { App.world.update(App.camera, 1 / 30); App.mode.update(1 / 30); App.fx.update(1 / 30, App.camera, App.renderer.domElement.height); App.renderer.render(App.scene, App.camera); }
+  } catch (e) { console.warn('warm-up skipped', e); }
   App.ready = true;
   App.startMode('menu');
   $id('loading').classList.add('hidden');
