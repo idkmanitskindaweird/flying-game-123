@@ -52,6 +52,7 @@ class NukeSystem {
     app.scene.add(this.group);
     this.flashEl = null;
     this.cool = 0;
+    this.armed = false; // armed (first N): the bombsight shows; the next N drops it
     this.cam = null; // the bomb camera: follows the bomb down, then watches the blast from a distance
     this._v = new THREE.Vector3();
   }
@@ -86,6 +87,7 @@ class NukeSystem {
 
   clear() {
     this.cam = null;
+    this.armed = false;
     for (const b of this.bombs) this.group.remove(b.mesh);
     this.bombs.length = 0;
     for (const d of this.blasts) this.dropBlast(d);

@@ -376,9 +376,16 @@ class FlyMode {
         this.fireMissile();
         return true;
       case 'KeyN':
-        if (this.nukes && this.nukes.cam) this.nukes.cam = null; // N again: back to the cockpit
-        else this.dropNuke();
+        if (!this.nukes) return true;
+        if (this.nukes.cam) this.nukes.cam = null; // while the bomb camera is on, N goes back to the cockpit
+        else if (!this.nukes.armed) { // first press: arm it and show the bombsight
+          this.nukes.armed = true;
+          this.pushMsg('NUKE ARMED', 'aim the diamond  ·  N: drop  ·  B: cancel', HUD_WARN, 26, 3.2);
+        } else this.dropNuke(); // second press: drop it
         return true;
+      case 'KeyB':
+        if (this.nukes && this.nukes.armed) { this.nukes.armed = false; this.pushMsg('NUKE SAFE', null, HUD_COL, 22, 1.5); return true; }
+        return false;
       case 'KeyG':
         if (this.recOn) this.stopRecording(); else this.startRecording();
         return true;
@@ -453,6 +460,7 @@ class FlyMode {
     if (this.state !== 'playing' || !p || !p.alive || !this.nukes) return;
     const bomb = this.nukes.drop(p);
     if (bomb) {
+      this.nukes.armed = false; // (press N again to arm the next one)
       if (this.recOn && this.recNukes) this.recNukes.push({ t: (this.recN - 1) * REC_DT, x: bomb.pos.x, y: bomb.pos.y, z: bomb.pos.z, vx: bomb.vel.x, vy: bomb.vel.y, vz: bomb.vel.z }); // so the replay shows it
       this.pushMsg('NUKE AWAY', 'N: back to your aircraft  ·  lethal radius 2.6 km', HUD_WARN, 26, 3.6);
       if (this.app.audio && this.app.audio.ok) this.app.audio.missileLaunch();

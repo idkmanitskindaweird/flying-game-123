@@ -143,7 +143,7 @@ function drawFlightHUD(m, ctx, w, h) {
   }
 
   // ---- nuclear bombsight: where a bomb released now would land -----------------------
-  if (m.nukes && m.state === 'playing' && !m.nukes.cam) {
+  if (m.nukes && m.nukes.armed && m.state === 'playing' && !m.nukes.cam) { // the bombsight is only shown once the nuke is armed (N)
     const hit = m.nukes.predict(p);
     if (hit) {
       const fl = _hv.copy(p.vel).multiplyScalar(hit.t).add(p.pos); // where YOU will be when it goes off
