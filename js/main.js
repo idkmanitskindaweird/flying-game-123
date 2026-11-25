@@ -232,7 +232,10 @@ App.launch = function (name) {
   if (p) p.textContent = name === 'free' ? 'Starting free flight...' : name === 'fly' ? 'Starting dogfight...' : name === 'replay' ? 'Loading the replay...' : 'Starting...';
   el.classList.remove('hidden');
   requestAnimationFrame(() => setTimeout(() => {
-    try { App.startMode(name === 'fly' ? 'dogfight' : name); } finally { el.classList.add('hidden'); if (p) p.textContent = old; App.launching = false; }
+    try { App.startMode(name === 'fly' ? 'dogfight' : name); } catch (e) {
+      App.frameError('starting ' + name, e);
+      try { App.startMode('menu'); } catch (e2) { /* nothing more to do */ }
+    } finally { el.classList.add('hidden'); if (p) p.textContent = old; App.launching = false; }
   }, 40));
 };
 
@@ -490,6 +493,18 @@ function bindMenus() {
 let _last = 0;
 let _fpsAcc = 0, _fpsN = 0;
 
+/** a script error inside the frame loop: keep running, log it, and tell the player once per kind of error (so it can be reported) */
+App.errors = {};
+App.frameError = function (where, e) {
+  const key = where + ': ' + (e && e.message);
+  App.errors[key] = (App.errors[key] || 0) + 1;
+  if (App.errors[key] === 1) {
+    console.error('[game] error in ' + where, e);
+    const loc = e && e.stack ? (String(e.stack).split(/\r?\n/)[1] || '').trim().slice(-60) : '';
+    App.toast('Error in ' + where + ': ' + (e && e.message ? e.message : e) + (loc ? ' (' + loc + ')' : ''), 9000);
+  }
+};
+
 function frame(now) {
   requestAnimationFrame(frame);
   if (!App.ready) return;
@@ -502,16 +517,19 @@ function frame(now) {
 
   if (!App.paused) {
     App.time += dt;
-    App.mode.update(dt);
-    App.world.update(App.camera, dt);
-    App.fx.update(dt, App.camera, App.renderer.domElement.height);
+    // each part is guarded: an error in one of them must not stop the picture from being drawn (that looked like a frozen game)
+    try { App.mode.update(dt); } catch (e) { App.frameError('update', e); }
+    try { App.world.update(App.camera, dt); } catch (e) { App.frameError('world', e); }
+    try { App.fx.update(dt, App.camera, App.renderer.domElement.height); } catch (e) { App.frameError('effects', e); }
   }
   App.renderer.render(App.scene, App.camera);
 
   const ctx = App.hudCtx;
   ctx.clearRect(0, 0, App.w, App.h);
-  if (App.mode && App.mode.drawHUD) App.mode.drawHUD(ctx, App.w, App.h);
-  if (App.world && App.world.weather && !App.paused) App.world.weather.drawOverlay(ctx, App.w, App.h);
+  try {
+    if (App.mode && App.mode.drawHUD) App.mode.drawHUD(ctx, App.w, App.h);
+    if (App.world && App.world.weather && !App.paused) App.world.weather.drawOverlay(ctx, App.w, App.h);
+  } catch (e) { App.frameError('hud', e); }
   if (App.debug) {
     ctx.fillStyle = '#fff';
     ctx.font = '12px monospace';
