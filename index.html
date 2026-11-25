@@ -10,7 +10,7 @@
    GitHub Pages lets a browser keep an old index.html for up to 10 minutes. If this copy of the page is older than the game's files,
    it asks version.json (never cached) which build is current and reloads itself ONCE with a fresh copy, so nobody ever has to clear
    their cache. The scripts below are loaded with ?v=BUILD so they always match this page. */
-var BUILD = '20261125d';
+var BUILD = '20261125b';
 window.__errs = []; // script errors, so the game can say what went wrong if a file fails to load
 window.addEventListener('error', function (e) { window.__errs.push(String(e.filename || '').split('/').pop() + ':' + e.lineno + ' ' + e.message); });
 (function () {
@@ -49,7 +49,7 @@ if (!window.__redirecting) document.write('<link rel="stylesheet" href="css/styl
   <div id="menu" class="screen hidden">
     <div class="menu-inner">
       <div class="brand">
-        <div class="logo">AFTERB</div>
+        <div class="logo">AFTERBURN!!!!!!!!!!!!!!!</div>
         <div class="tagline">Fly fighter jets. Or just watch them roar past &mdash; and hear the Doppler effect.</div>
       </div>
       <div class="menu-buttons">
@@ -355,8 +355,8 @@ if (!window.__redirecting) document.write('<link rel="stylesheet" href="css/styl
 <script>
 (function () {
   if (window.__redirecting) return;
-  var files = ['lib/three.min.js', 'js/util.js', 'js/world.js', 'js/city.js', 'js/particles.js', 'js/fireball.js', 'js/jet.js', 'js/c17.js', 'js/airliners.js', 'js/clouds.js', 'js/weather.js', 'js/audio.js', 'js/flyby.js', 'js/hud.js', 'js/crash.js', 'js/collision.js', 'js/blast.js', 'js/combat.js', 'js/replay.js', 'js/main.js'];
-  for (var i = 0; i < files.length; i++) document.write('<script src="' + files[i] + '?v=' + BUILD + '" charset="utf-8" onerror="window.__errs.push(&quot;LOAD FAILED: &quot; + this.src)"><\/script>');
+  var files = ['lib/three.min.js', 'js/util.js', 'js/world.js', 'js/city.js', 'js/particles.js', 'js/fireball.js', 'js/jet.js', 'js/c17.js', 'js/airliners.js', 'js/clouds.js', 'js/weather.js', 'js/audio.js', 'js/flyby.js', 'js/hud.js', 'js/crash.js', 'js/hitbox.js', 'js/nuke.js', 'js/combat.js', 'js/replay.js', 'js/main.js'];
+  for (var i = 0; i < files.length; i++) document.write('<script src="' + files[i] + '?v=' + BUILD + '" charset="utf-8"><\/script>');
 })();
 </script>
 </body>
