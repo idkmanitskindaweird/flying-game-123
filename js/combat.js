@@ -178,8 +178,8 @@ class FlyMode {
     if (!this.bullets) this.bullets = new BulletSystem(app.scene);
     if (!this.crashFx) this.crashFx = new CrashFX(app);
     this.crashFx.clear();
-    if (!this.nukes) this.nukes = new NukeSystem(app);
-    this.nukes.clear();
+    if (!this.nukes && typeof NukeSystem !== 'undefined') this.nukes = new NukeSystem(app);
+    if (this.nukes) this.nukes.clear();
     if (app.world.city) app.world.city.reset(); // a new game: the city is rebuilt
     this.bullets.clear();
     app.fx.clear();
@@ -650,6 +650,10 @@ class FlyMode {
 
   /** which part of this aircraft (if any) is touching the ground, the sea or a building: 'body' | 'wingL' | 'wingR' | null */
   hitCheck(jet) {
+    if (typeof hitboxesFor === 'undefined') { // (an old cached page without hitbox.js: fall back to a simple centre-point check rather than failing every frame)
+      const w0 = this.app.world;
+      return jet.pos.y < w0.surfaceAt(jet.pos.x, jet.pos.z) + (jet.heavy ? jet.spec.crash * jet.spec.scale : 4) || w0.cityHit(jet.pos.x, jet.pos.y, jet.pos.z) ? 'body' : null;
+    }
     const w = this.app.world, city = w.city, q = jet.quat, cur = jet.pos, boxes = hitboxesFor(jet), lost = jet.lost;
     const prev = jet._hbPrev || (jet._hbPrev = new THREE.Vector3().copy(cur));
     const dist = prev.distanceTo(cur);
