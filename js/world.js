@@ -15,6 +15,8 @@ const PLAIN_H = 24; // elevation of the flat airfield plain (m above sea level)
 /* ---------- graphics quality: five levels per setting ----------------------------------------------
    Every setting has the same five levels (index 0..4 = Low, Medium, High, Epic, Ultra). A preset sets all of them to the
    same level; "Custom" lets each one be chosen on its own. buildQuality() turns the chosen levels into the numbers the game uses. */
+/** the prevailing wind at cloud height (m/s): it drifts the clouds and their shadows across the ground */
+const WX_WIND = { x: 9, z: 3.6 };
 const GFX_LEVELS = ['Low', 'Medium', 'High', 'Epic', 'Ultra'];
 const GFX = {
   res: [{ pr: 1, ss: 0 }, { pr: 1.25, ss: 0 }, { pr: 2, ss: 0 }, { pr: 2, ss: 1.25 }, { pr: 2.5, ss: 1.75 }], // pr: max pixel ratio, ss: supersampling floor
@@ -364,22 +366,34 @@ class Terrain {
     this.indexAttr = new THREE.BufferAttribute(new Uint32Array(idx), 1);
     this.detailTex = makeDetailTexture();
 
+    // the weather's effect on the ground: moving cloud shadows and the darkening of wet ground (World.update drives these)
+    this.wxU = this.wxU || { uCloud: { value: 0.5 }, uWxTime: { value: 0 }, uWxWind: { value: new THREE.Vector2(WX_WIND.x, WX_WIND.z) }, uWet: { value: 0 } };
+    const wxU = this.wxU;
     this.mats = [];
     for (let L = 0; L <= this.MAXL; L++) {
       const m = new THREE.MeshLambertMaterial({ vertexColors: true });
       const tex = this.detailTex;
       m.onBeforeCompile = (shader) => {
         shader.uniforms.uDetail = { value: tex };
+        shader.uniforms.uCloud = wxU.uCloud; shader.uniforms.uWxTime = wxU.uWxTime; shader.uniforms.uWxWind = wxU.uWxWind; shader.uniforms.uWet = wxU.uWet;
         shader.vertexShader = shader.vertexShader
           .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
           .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;');
         shader.fragmentShader = shader.fragmentShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D uDetail;')
+          .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D uDetail;\nuniform float uCloud;\nuniform float uWxTime;\nuniform float uWet;\nuniform vec2 uWxWind;')
           .replace(
             '#include <color_fragment>',
             `#include <color_fragment>
             float dn = texture2D(uDetail, vWPos.xz * 0.0105).r * 0.55 + texture2D(uDetail, vWPos.xz * 0.071).r * 0.45;
-            diffuseColor.rgb *= 0.74 + 0.52 * dn;`
+            diffuseColor.rgb *= 0.74 + 0.52 * dn;
+            // patches of shade under the clouds, drifting with the wind (more cloud: more of the ground in shade)
+            vec2 cp = vWPos.xz - uWxWind * uWxTime;
+            float cs = texture2D(uDetail, cp * 0.000062).r * 0.62 + texture2D(uDetail, cp * 0.00019).r * 0.38;
+            float cth = 0.64 - 0.24 * min(uCloud, 0.75);
+            float shade = smoothstep(cth - 0.05, cth + 0.09, cs);
+            diffuseColor.rgb *= 1.0 - 0.34 * shade * min(uCloud * 1.2, 0.9);
+            // rain soaks the ground: darker and a touch bluer
+            diffuseColor.rgb *= vec3(1.0 - 0.3 * uWet, 1.0 - 0.26 * uWet, 1.0 - 0.2 * uWet);`
           );
       };
       this.mats.push(m);
@@ -726,9 +740,11 @@ class Clouds {
   /** brightness of the cloud tops: storm weather makes the ordinary clouds greyer */
   setTint(t) { this.tint = t; for (const g of this.slots) g.userData.mat.uniforms.uTint.value.setScalar(t); }
 
-  update(cam) {
+  update(cam, time) {
     const cell = this.cell, W = this.W;
-    const ccx = cam.x / cell, ccz = cam.z / cell;
+    // the whole cloud field drifts downwind (the same wind that moves the cloud shadows on the ground)
+    const dx0 = WX_WIND.x * (time || 0), dz0 = WX_WIND.z * (time || 0);
+    const ccx = (cam.x - dx0) / cell, ccz = (cam.z - dz0) / cell;
     let inside = 0;
     for (const grp of this.slots) {
       const u = grp.userData;
@@ -736,8 +752,8 @@ class Clouds {
       const wj = u.j + W * Math.round((ccz - u.j) / W);
       if (wi !== u.cx || wj !== u.cz) {
         u.cx = wi; u.cz = wj;
-        grp.position.set((wi + u.jx) * cell, u.alt, (wj + u.jz) * cell);
       }
+      grp.position.set((wi + u.jx) * cell + dx0, u.alt, (wj + u.jz) * cell + dz0);
       const dx = grp.position.x - cam.x, dz = grp.position.z - cam.z, dy = grp.position.y - cam.y;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
       u.mat.uniforms.uOpacity.value = 0.95 * smoothstep(u.r * 0.25, u.r * 1.1, d);
@@ -1032,8 +1048,15 @@ class World {
     this.sky.position.copy(p);
     this.water.position.set(p.x, 0, p.z);
     this.waveTex.offset.set(p.x / 150 + this.time * 0.006, -p.z / 150 + this.time * 0.004);
-    this.clouds.update(p);
+    this.clouds.update(p, this.time);
     this.camPos = p;
     this.weather.update(dt, p);
+    // the weather's effect on the ground
+    const wu = this.terrain.wxU;
+    if (wu) {
+      wu.uWxTime.value = this.time;
+      wu.uCloud.value = this.clouds.coverage;
+      wu.uWet.value += (this.weather.wetTarget(p) - wu.uWet.value) * (1 - Math.exp(-dt * 0.25)); // the ground soaks and dries slowly
+    }
   }
 }

@@ -49,6 +49,8 @@ function makeRainTexture() {
   return t;
 }
 
+const _rainV = new THREE.Vector3();
+
 class StormCell {
   constructor(weather, x, z, r, seed) {
     this.w = weather;
@@ -300,13 +302,42 @@ class Weather {
     return best;
   }
 
-  /** turbulence a flying aircraft feels (0..1) */
-  turbAt(pos) { return this.intensityAt(pos.x, pos.y, pos.z); }
+  /** how wet the ground should be around (x, z): soaked in a storm, drenched near a hurricane, dry in fair weather */
+  wetTarget(cam) {
+    let w = this.mode === 'storm' ? 0.75 : 0;
+    const h = this.hurricane;
+    if (h) {
+      const d = Math.hypot(cam.x - h.x, cam.z - h.z);
+      w = Math.max(w, 0.9 * (1 - smoothstep(h.R * 0.9, h.R * 2.0, d)));
+    }
+    return w;
+  }
 
-  /** wind (m/s) pushing an aircraft along (only a hurricane has any) */
+  /**
+   * turbulence a flying aircraft feels (0..1): thunderstorms and the hurricane are violent; flying through the body of an ordinary
+   * cumulus cloud is bumpy, and the air near the ground is always a little rough (rising warm air, wind over the terrain)
+   */
+  turbAt(pos) {
+    let t = this.intensityAt(pos.x, pos.y, pos.z);
+    const cl = this.world.clouds;
+    if (cl && cl.inside > 0.05) t = Math.max(t, 0.32 * cl.inside);
+    const agl = pos.y - Math.max(0, this.world.surfaceAt(pos.x, pos.z));
+    const ground = (this.mode === 'fair' ? 0.05 : 0.11) * (1 - smoothstep(120, 1000, agl));
+    return Math.max(t, ground);
+  }
+
+  /** wind (m/s) pushing an aircraft along: a steady breeze that gusts (stronger in bad weather), plus a hurricane's winds */
   windAt(pos) {
-    if (!this.hurricane) return null;
-    return this.hurricane.windAt(pos.x, pos.y, pos.z, this.hurrWind);
+    const base = this.mode === 'storm' ? 1.35 : this.mode === 'cloudy' ? 0.85 : 0.5;
+    const t = this.world.time || 0;
+    const gust = 1 + 0.35 * Math.sin(t * 0.37 + pos.x * 0.0004) + 0.2 * Math.sin(t * 0.91 + pos.z * 0.0006) + 0.1 * Math.sin(t * 2.3);
+    const o = this.hurrWind;
+    o.x = WX_WIND.x * base * gust; o.z = WX_WIND.z * base * gust;
+    if (this.hurricane) {
+      const hw = this.hurricane.windAt(pos.x, pos.y, pos.z, this._hw || (this._hw = { x: 0, z: 0 }));
+      if (hw) { o.x += hw.x; o.z += hw.z; }
+    }
+    return o;
   }
 
   /** blend the sky, fog and light between fair weather and the gloom of a storm. sky: gloom of the sky (0..1); I: inside-storm amount; inCloud: inside an ordinary cloud (white-out) */
@@ -389,10 +420,26 @@ class Weather {
       }
     }
     this.boltLife = Math.max(0, this.boltLife - dt);
+    // sheet lightning: flashes inside the clouds that light them from within, with no bolt to the ground
+    this.sheet = (this.sheet || 0) * Math.exp(-dt * 6);
+    if (storm) {
+      for (const c of this.cells) {
+        c.icTimer = (c.icTimer === undefined ? rand(0.5, 3) : c.icTimer) - dt;
+        if (c.icTimer <= 0) {
+          c.icTimer = rand(0.7, 3.2);
+          const dist = Math.hypot(c.x - cam.x, c.z - cam.z);
+          if (dist < 18000) {
+            this.sheet = Math.max(this.sheet, rand(0.35, 0.85) * (1 - smoothstep(2000, 18000, dist) * 0.7));
+            const a = typeof App !== 'undefined' ? App.audio : null;
+            if (a && a.ok && a.thunder && Math.random() < 0.5) { const rel = { x: c.x - cam.x, y: c.baseY + 2500 - cam.y, z: c.z - cam.z }; a.later(() => a.thunder(rel, Math.hypot(rel.x, rel.y, rel.z) * 1.3), Math.min(dist / SPEED_OF_SOUND, 25) * 1000); } // a long, low rumble from inside the cloud
+          }
+        }
+      }
+    }
     // the flash flickers: two or three quick pulses then it dies away
     const t = 0.45 - this.boltLife;
     const flick = this.boltLife > 0 ? (Math.sin(t * 38) > -0.2 ? 1 : 0.35) * Math.exp(-t * 4.5) : 0;
-    this.flash = flick;
+    this.flash = Math.max(flick, this.sheet * 0.55);
     for (const s of this.bolt) { if (this.boltLife <= 0) s.visible = false; else s.material.opacity = Math.min(1, flick * 1.4); }
     this.light.intensity = 9 * this.flash;
     for (const c of this.cells) c.mat.uniforms.uTint.value.setScalar(0.82 * (1 + 1.3 * this.flash));
@@ -494,18 +541,47 @@ class Weather {
       ctx.save();
       ctx.fillStyle = `rgba(22,28,38,${0.32 * I})`;
       ctx.fillRect(0, 0, w, h);
-      // a hurricane's rain is driven sideways by the wind
+      // the rain streaks past: from the point you are flying towards, outwards, longer the faster you go (a hurricane drives it sideways)
       const cp = this.world.camPos || { x: 0, y: 0, z: 0 };
-      const slant = this.hurricane && this.hurricane.intensityAt(cp.x, cp.y, cp.z) > 0.2 ? 0.7 : 0.28;
-      ctx.strokeStyle = `rgba(210,222,240,${0.2 + 0.25 * I})`;
-      ctx.lineWidth = 1.2;
+      const app = typeof App !== 'undefined' ? App : null, pl = app && app.mode && app.mode.player;
+      let vx = w / 2, vy = h * 0.45, spd = 60;
+      if (pl && pl.vdir && app.camera) {
+        const q = _rainV.set(cp.x + pl.vdir.x * 800, cp.y + pl.vdir.y * 800, cp.z + pl.vdir.z * 800).project(app.camera);
+        if (q.z < 1) { vx = (q.x * 0.5 + 0.5) * w; vy = (-q.y * 0.5 + 0.5) * h; }
+        spd = pl.speed || 60;
+      }
+      const wind = this.hurricane && this.hurricane.intensityAt(cp.x, cp.y, cp.z) > 0.2 ? 1 : 0;
+      const k = clamp(spd / 260, 0.15, 1.6);
+      ctx.strokeStyle = `rgba(214,226,242,${0.12 + 0.2 * I})`;
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      const n = Math.round(260 * I);
+      const n = Math.round(200 * I);
       for (let i = 0; i < n; i++) {
-        const x = Math.random() * (w + 200), y = Math.random() * h, l = 14 + Math.random() * 30;
-        ctx.moveTo(x, y); ctx.lineTo(x - l * slant, y + l);
+        const x = Math.random() * w, y = Math.random() * h;
+        let dx = x - vx, dy = y - vy;
+        const dl = Math.hypot(dx, dy) || 1;
+        dx /= dl; dy /= dl;
+        const len = (6 + Math.random() * 15) * (0.45 + 0.55 * k) * (0.3 + Math.min(1, dl / (w * 0.5)));
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - dx * len + (wind ? len * 0.5 : 0), y - dy * len + len * 0.22); // (the streak trails back towards where it came from; gravity pulls it a little down)
       }
       ctx.stroke();
+      // drops that land on the glass, bead, and run down it
+      const dr = this.drops || (this.drops = []);
+      if (dr.length < 46 && Math.random() < I * 0.9) dr.push({ x: Math.random() * w, y: Math.random() * h * 0.9, r: 2 + Math.random() * 5, life: 3 + Math.random() * 4, age: 0, v: 8 + Math.random() * 30 });
+      ctx.fillStyle = 'rgba(205,220,240,0.11)';
+      ctx.strokeStyle = 'rgba(235,244,255,0.34)';
+      ctx.lineWidth = 1;
+      for (let i = dr.length - 1; i >= 0; i--) {
+        const d = dr[i];
+        d.age += 0.016; d.y += d.v * 0.016 * (d.age > d.life * 0.4 ? 1 : 0.1); d.x += Math.sin(d.age * 3 + d.r) * 0.15;
+        if (d.age > d.life) { dr.splice(i, 1); continue; }
+        const f = Math.min(1, (d.life - d.age) / 0.8) * Math.min(1, d.age / 0.2);
+        ctx.globalAlpha = f;
+        ctx.beginPath(); ctx.ellipse(d.x, d.y, d.r * 0.8, d.r * 1.15, 0, 0, TAU); ctx.fill(); ctx.stroke();
+        if (d.age > d.life * 0.4) { ctx.beginPath(); ctx.moveTo(d.x, d.y - d.r); ctx.lineTo(d.x, d.y - d.r - d.v * 0.5); ctx.stroke(); } // the wet trail it leaves
+      }
+      ctx.globalAlpha = 1;
       ctx.restore();
     }
     if (this.flash > 0.02 && this.boltPos) {
