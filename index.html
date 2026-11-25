@@ -5,7 +5,31 @@
 <title>AFTERBURN - Fighter Jet Flight Game</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Fly fighter jets, dogfight, or stand at an airshow and hear the Doppler effect as jets roar past.">
-<link rel="stylesheet" href="css/style.css?v=20261125a">
+<script>
+/* ---- BUILD: change this number (and the one in version.json) every time the game files change ----
+   GitHub Pages lets a browser keep an old index.html for up to 10 minutes. If this copy of the page is older than the game's files,
+   it asks version.json (never cached) which build is current and reloads itself ONCE with a fresh copy, so nobody ever has to clear
+   their cache. The scripts below are loaded with ?v=BUILD so they always match this page. */
+var BUILD = '20261125b';
+(function () {
+  if (location.protocol === 'file:') return; // opened straight from the folder: nothing is cached
+  try {
+    var x = new XMLHttpRequest();
+    x.open('GET', 'version.json?t=' + Date.now(), false);
+    x.send();
+    if (x.status === 200) {
+      var latest = JSON.parse(x.responseText).build;
+      var u = new URL(location.href);
+      if (latest && latest !== BUILD && u.searchParams.get('b') !== latest) { // (the second test stops it from ever looping)
+        u.searchParams.set('b', latest);
+        window.__redirecting = true; // (the rest of this page does not load: a fresh copy is on its way)
+        location.replace(u.toString());
+      }
+    }
+  } catch (e) { /* offline or blocked: carry on with this copy */ }
+})();
+if (!window.__redirecting) document.write('<link rel="stylesheet" href="css/style.css?v=' + BUILD + '">');
+</script>
 </head>
 <body>
 <canvas id="gl"></canvas>
@@ -326,26 +350,12 @@
   <div id="toast"></div>
 </div>
 
-<script src="lib/three.min.js" charset="utf-8"></script>
-<!-- when files change, bump the ?v= number on every script/stylesheet tag: a browser that cached an old index.html must not mix old and new scripts -->
-<script src="js/util.js?v=20261125a" charset="utf-8"></script>
-<script src="js/world.js?v=20261125a" charset="utf-8"></script>
-<script src="js/city.js?v=20261125a" charset="utf-8"></script>
-<script src="js/particles.js?v=20261125a" charset="utf-8"></script>
-<script src="js/fireball.js?v=20261125a" charset="utf-8"></script>
-<script src="js/jet.js?v=20261125a" charset="utf-8"></script>
-<script src="js/c17.js?v=20261125a" charset="utf-8"></script>
-<script src="js/airliners.js?v=20261125a" charset="utf-8"></script>
-<script src="js/clouds.js?v=20261125a" charset="utf-8"></script>
-<script src="js/weather.js?v=20261125a" charset="utf-8"></script>
-<script src="js/audio.js?v=20261125a" charset="utf-8"></script>
-<script src="js/flyby.js?v=20261125a" charset="utf-8"></script>
-<script src="js/hud.js?v=20261125a" charset="utf-8"></script>
-<script src="js/crash.js?v=20261125a" charset="utf-8"></script>
-<script src="js/hitbox.js?v=20261125a" charset="utf-8"></script>
-<script src="js/nuke.js?v=20261125a" charset="utf-8"></script>
-<script src="js/combat.js?v=20261125a" charset="utf-8"></script>
-<script src="js/replay.js?v=20261125a" charset="utf-8"></script>
-<script src="js/main.js?v=20261125a" charset="utf-8"></script>
+<script>
+(function () {
+  if (window.__redirecting) return;
+  var files = ['lib/three.min.js', 'js/util.js', 'js/world.js', 'js/city.js', 'js/particles.js', 'js/fireball.js', 'js/jet.js', 'js/c17.js', 'js/airliners.js', 'js/clouds.js', 'js/weather.js', 'js/audio.js', 'js/flyby.js', 'js/hud.js', 'js/crash.js', 'js/hitbox.js', 'js/nuke.js', 'js/combat.js', 'js/replay.js', 'js/main.js'];
+  for (var i = 0; i < files.length; i++) document.write('<script src="' + files[i] + '?v=' + BUILD + '" charset="utf-8"><\/script>');
+})();
+</script>
 </body>
 </html>
