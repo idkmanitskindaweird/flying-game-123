@@ -658,11 +658,11 @@ class FlyMode {
         try { tried = sessionStorage.getItem('selfHeal') === '1'; sessionStorage.setItem('selfHeal', '1'); } catch (e) { tried = true; }
         if (!tried && typeof location !== 'undefined' && location.protocol !== 'file:') { location.replace(location.pathname + '?r=' + Date.now()); return null; }
         // it did not help: say what is wrong (was hitbox.js asked for, and did it fail?)
-        let why = 'hitbox.js was not requested by this page (an old copy of the page)';
+        let why = 'collision.js was not requested by this page (an old copy of the page)';
         try {
-          const got = performance.getEntriesByType('resource').some((r) => /hitbox\.js/.test(r.name));
-          const errs = (window.__errs || []).filter((x) => /hitbox/.test(x));
-          if (got) why = errs.length ? 'hitbox.js failed: ' + errs[0] : 'hitbox.js was loaded but did not run';
+          const got = performance.getEntriesByType('resource').some((r) => /collision\.js/.test(r.name));
+          const errs = (window.__errs || []).filter((x) => /collision|LOAD FAILED/.test(x));
+          if (got) why = errs.length ? 'collision.js failed: ' + errs[0] : 'collision.js was loaded but did not run';
         } catch (e) { /* ignore */ }
         this.app.toast('Wings and nukes will not work properly: ' + why + '. Press Ctrl+F5.', 15000);
       }
