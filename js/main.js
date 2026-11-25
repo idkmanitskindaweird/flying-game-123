@@ -542,6 +542,14 @@ function frame(now) {
 
 /* ---------- boot ------------------------------------------------------------------------ */
 
+/** a page that was cached from before the build loader existed has no BUILD: it replaces itself, once, with a fresh copy (a unique address cannot come from any cache) */
+(function () {
+  if (typeof BUILD !== 'undefined' || location.protocol === 'file:') return;
+  let tried = false;
+  try { tried = sessionStorage.getItem('oldPageHeal') === '1'; sessionStorage.setItem('oldPageHeal', '1'); } catch (e) { tried = true; }
+  if (!tried) location.replace(location.pathname + '?fresh=' + Date.now());
+})();
+
 function boot() {
   Settings.load();
   App.quality = buildQuality(Settings.data.gfx);
@@ -581,11 +589,19 @@ function boot() {
   App.refreshReplayUI();
   // warm-up: the first time free flight starts, the graphics driver compiles a batch of new shaders and uploads textures (seconds on a slow
   // computer). Do that now, behind the loading screen, so the first real flight does not freeze.
+  App._warming = true;
   try {
     App.startMode('free');
     for (let i = 0; i < 3; i++) { App.world.update(App.camera, 1 / 30); App.mode.update(1 / 30); App.fx.update(1 / 30, App.camera, App.renderer.domElement.height); App.renderer.render(App.scene, App.camera); }
   } catch (e) { console.warn('warm-up skipped', e); }
+  App._warming = false;
   App.ready = true;
+  { // a small build label on the menu, so it is easy to see which copy of the game a computer is really running
+    const lab = document.createElement('div');
+    lab.textContent = 'build ' + (typeof BUILD !== 'undefined' ? BUILD : 'old');
+    lab.style.cssText = 'position:fixed;right:8px;bottom:6px;font:11px system-ui,sans-serif;color:rgba(255,255,255,.45);z-index:5;pointer-events:none;';
+    document.body.appendChild(lab);
+  }
   App.startMode('menu');
   $id('loading').classList.add('hidden');
   setTimeout(() => { try { if (!App.audio) App.audio = new AudioEngine(); App.audio.volume = Settings.data.volume; if (!App.audio.ok) App.audio.init(); } catch (e) { /* audio is set up again when a mode starts */ } }, 1500);

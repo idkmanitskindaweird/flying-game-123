@@ -651,7 +651,7 @@ class FlyMode {
   /** which part of this aircraft (if any) is touching the ground, the sea or a building: 'body' | 'wingL' | 'wingR' | null */
   hitCheck(jet) {
     if (typeof hitboxesFor === 'undefined') { // (an old cached page without hitbox.js: fall back to a simple centre-point check rather than failing every frame)
-      if (!App._staleWarned) {
+      if (!App._staleWarned && !App._warming) { // (not during the start-up warm-up, which runs behind the loading screen)
         App._staleWarned = true;
         // first try to fix it by itself: reload once with a unique address, which cannot come from the cache
         let tried = false;

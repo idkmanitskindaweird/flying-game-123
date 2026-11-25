@@ -10,7 +10,7 @@
    GitHub Pages lets a browser keep an old index.html for up to 10 minutes. If this copy of the page is older than the game's files,
    it asks version.json (never cached) which build is current and reloads itself ONCE with a fresh copy, so nobody ever has to clear
    their cache. The scripts below are loaded with ?v=BUILD so they always match this page. */
-var BUILD = '20261125b';
+var BUILD = '20261125c';
 window.__errs = []; // script errors, so the game can say what went wrong if a file fails to load
 window.addEventListener('error', function (e) { window.__errs.push(String(e.filename || '').split('/').pop() + ':' + e.lineno + ' ' + e.message); });
 (function () {
