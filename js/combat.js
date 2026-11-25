@@ -651,6 +651,7 @@ class FlyMode {
   /** which part of this aircraft (if any) is touching the ground, the sea or a building: 'body' | 'wingL' | 'wingR' | null */
   hitCheck(jet) {
     if (typeof hitboxesFor === 'undefined') { // (an old cached page without hitbox.js: fall back to a simple centre-point check rather than failing every frame)
+      if (!App._staleWarned) { App._staleWarned = true; this.app.toast('Your browser is showing an OLD copy of the game (wings and nukes will not work properly). Press Ctrl+F5 to reload it.', 12000); }
       const w0 = this.app.world;
       return jet.pos.y < w0.surfaceAt(jet.pos.x, jet.pos.z) + (jet.heavy ? jet.spec.crash * jet.spec.scale : 4) || w0.cityHit(jet.pos.x, jet.pos.y, jet.pos.z) ? 'body' : null;
     }
