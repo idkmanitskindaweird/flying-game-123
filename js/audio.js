@@ -613,6 +613,24 @@ class AudioEngine {
     for (const d of [1.2, 2.6, 4.4, 6.5]) this.later(() => this.noiseBurst({ type: 'brown', dur: 2.2, gain: 0.8, f0: 200, f1: 30, q: 0.5, filt: 'lowpass', attack: 0.05, rel }), d * 1000); // the roar rolling off the hills and the falling buildings
   }
 
+  /** the landing gear travelling: a whine of hydraulics and the clunk of it locking */
+  gearMove(heavy) {
+    if (!this.ok) return;
+    const d = heavy ? 5.5 : 2.8;
+    this.noiseBurst({ type: 'brown', dur: d, gain: 0.18, f0: 260, f1: 180, q: 0.8, filt: 'lowpass', attack: 0.15 });
+    this.tone({ f0: 140, f1: 220, dur: d, gain: 0.05, type: 'sawtooth', attack: 0.2 });
+    this.later(() => { this.noiseBurst({ type: 'brown', dur: 0.2, gain: 0.55, f0: 300, f1: 70, q: 0.5, filt: 'lowpass', attack: 0.002 }); this.tone({ f0: 90, f1: 50, dur: 0.18, gain: 0.3, type: 'sine', attack: 0.002 }); }, d * 1000);
+  }
+
+  /** wheels meeting the runway: a chirp of rubber and a thump (vigor ~0.7 gentle .. 1.7 hard) */
+  touchdown(vigor) {
+    if (!this.ok) return;
+    const v = clamp(vigor || 1, 0.4, 2);
+    this.noiseBurst({ type: 'white', dur: 0.35 + 0.15 * v, gain: 0.2 * v, f0: 2600, f1: 1500, q: 1.2, filt: 'bandpass', attack: 0.004 }); // the squeal
+    this.noiseBurst({ type: 'brown', dur: 0.4, gain: 0.5 * v, f0: 380, f1: 60, q: 0.5, filt: 'lowpass', attack: 0.002 });
+    this.tone({ f0: 70, f1: 38, dur: 0.35, gain: 0.35 * v, type: 'sine', attack: 0.003 });
+  }
+
   /** one footstep (heard from where you stand): kind 'grass' | 'hard' | 'sand'; vigor ~1 walking, ~1.5 running */
   footstep(kind, vigor) {
     if (!this.ok) return;

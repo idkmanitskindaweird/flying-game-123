@@ -219,6 +219,7 @@ class ReplayMode extends WatchMode {
     this.wingN = 0;
     this.applyWings(false);
     jet.poseAt(this.rec, this.rt);
+    applyGearPose(jet.model, gearTAt(this.rec.gear, this.rt, jet.heavy), jet.heavy);
     jet.seedHistory(this.rec, this.rt, this.base);
     jet.syncVisual(app.time);
     jet.group.visible = true;
@@ -476,6 +477,7 @@ class ReplayMode extends WatchMode {
     if (this.jet) {
       const j = this.jet;
       j.poseAt(this.rec, this.rt);
+      applyGearPose(j.model, gearTAt(this.rec.gear, this.rt, j.heavy), j.heavy); // the gear goes up and down as it did in the flight
       if (this.playing) this.applyWings(true);
       if (this.playing) j.recordHistory(t);
       if (!this.crashed) j.group.visible = !(this.rt > this.dur + 0.3); // the recording is over: the aircraft is gone while a nuke plays out

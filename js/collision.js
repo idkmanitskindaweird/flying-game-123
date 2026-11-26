@@ -56,7 +56,7 @@ function* _hbGen(jet, key) {
   const group = jet.group, model = jet.model;
   const spec = jet.spec;
   const gsm = new THREE.Matrix4().makeScale(group.scale.x, group.scale.y, group.scale.z);
-  const skip = new Set([model.flame, model.core, model.glow].filter(Boolean));
+  const skip = new Set([model.flame, model.core, model.glow, model.gear].filter(Boolean)); // (the wheels are not part of the hit shape: they are what you land on)
   const tris = []; // flat arrays of 9 numbers per triangle, in the aircraft's own frame
   const m = new THREE.Matrix4(), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
   let mx = 0, my = 0, mz = 0;

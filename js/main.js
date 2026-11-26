@@ -4,7 +4,7 @@
    ========================================================================== */
 
 const Settings = {
-  data: { renderDist: 0, volume: 0.8, quality: 'med', weather: 'cloudy', hurricane: 'off', gfx: null, units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
+  data: { spawn: 'runway', renderDist: 0, volume: 0.8, quality: 'med', weather: 'cloudy', hurricane: 'off', gfx: null, units: 'imperial', invert: false, assist: true, mouse: false, plane: 'fighter' },
   load() {
     try {
       const s = localStorage.getItem('afterburn.settings');
@@ -93,12 +93,12 @@ const ReplayStore = {
     const f = new Float32Array(rec.d), u = new Uint8Array(f.buffer);
     let str = '';
     for (let i = 0; i < u.length; i += 0x8000) str += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
-    return { kind: rec.kind || 'fighter', crash: rec.crash || null, wings: rec.wings || [], nukes: rec.nukes || [], n: rec.n, dt: rec.dt, date: Date.now(), b64: btoa(str) };
+    return { kind: rec.kind || 'fighter', crash: rec.crash || null, wings: rec.wings || [], nukes: rec.nukes || [], gear: rec.gear || [], n: rec.n, dt: rec.dt, date: Date.now(), b64: btoa(str) };
   },
   decode(slot) {
     const str = atob(slot.b64), u = new Uint8Array(str.length);
     for (let i = 0; i < str.length; i++) u[i] = str.charCodeAt(i);
-    return { dt: slot.dt, n: slot.n, d: new Float32Array(u.buffer), kind: slot.kind, crash: slot.crash, wings: slot.wings || [], nukes: slot.nukes || [] };
+    return { dt: slot.dt, n: slot.n, d: new Float32Array(u.buffer), kind: slot.kind, crash: slot.crash, wings: slot.wings || [], nukes: slot.nukes || [], gear: slot.gear || [] };
   },
   save(i, rec) {
     const old = this.slots[i];
@@ -349,6 +349,7 @@ function syncSettingsUI() {
   $id('s-units').value = d.units;
   $id('s-weather').value = d.weather;
   $id('s-hurricane').value = d.hurricane;
+  $id('s-start').value = d.spawn || 'runway';
   $id('s-invert').checked = d.invert;
   $id('s-assist').checked = d.assist;
   $id('s-mouse').checked = d.mouse;
@@ -378,6 +379,7 @@ function bindSettings() {
   $id('s-weather').addEventListener('change', () => { d.weather = $id('s-weather').value; Settings.save(); if (App.world) App.world.weather.setMode(d.weather); $id('s-weather').blur(); });
   $id('s-hurricane').addEventListener('change', () => { d.hurricane = $id('s-hurricane').value; Settings.save(); if (App.world) App.world.weather.setHurricane(d.hurricane === 'on'); $id('s-hurricane').blur(); const hi = d.hurricane === 'on' && App.world.weather.hurricaneInfo(App.camera.position.x, App.camera.position.z);
     App.toast(hi ? `A hurricane has formed ${(hi.dist / 1000).toFixed(0)} km to the ${hi.name} \u2014 follow the blue marker on screen and the H on the radar` : 'Hurricane removed', 5200); });
+  $id('s-start').addEventListener('change', () => { d.spawn = $id('s-start').value; Settings.save(); $id('s-start').blur(); });
   $id('s-units').addEventListener('change', () => { d.units = $id('s-units').value; Settings.save(); });
   for (const [id, key] of [['s-invert', 'invert'], ['s-assist', 'assist'], ['s-mouse', 'mouse']]) {
     $id(id).addEventListener('change', () => { d[key] = $id(id).checked; Settings.save(); $id(id).blur(); });

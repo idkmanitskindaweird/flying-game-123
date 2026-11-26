@@ -420,6 +420,8 @@ class Jet {
     this.model = this.spec ? this.spec.build(!!opts.gear) : buildJetMesh(this.palName);
     if (this.spec) this.radius = this.spec.radius * this.spec.scale / 1.25;
     this.group = this.model.group;
+    if (!this.spec && typeof buildFighterGear === 'function') this.model.gear = buildFighterGear(this.group); // (a fighter's gear, hidden until lowered)
+    this.gearT = 0; this.gearDown = false; this.onGround = false;
     // sun shadows: the airframe throws and receives them
     this.model.body.castShadow = this.model.body.receiveShadow = true;
     if (this.model.canopy) this.model.canopy.castShadow = true;
@@ -556,6 +558,7 @@ class Aircraft extends Jet {
     this._lastVdir = new THREE.Vector3(0, 0, -1);
     this.machScale = this.heavy ? 1 : FIGHTER_SPEED;
     if (this.spec) { this.cruise = this.spec.cruise; this.gMul = this.spec.gMul; this.assist = true; }
+    if (this.gearInit) this.gearInit();
   }
 
   /** heading: yaw radians (0 = looking toward -Z, +ve turns left). */
@@ -573,12 +576,16 @@ class Aircraft extends Jet {
     this.dying = false;
     this.hp = this.maxHp;
     this.damageSmoke = 0;
+    this.onGround = false; this.gearDown = false; this.gearT = 0; this.gpitch = 0; // (an air start has the gear up)
+    if (typeof applyGearPose === 'function') applyGearPose(this.model, 0, this.heavy);
   }
 
   step(dt) {
     const inp = this.input;
     let spd = this.speed;
     const rho = Math.exp(-Math.max(0, this.pos.y) / 9500);
+    if (this.updateGear) this.updateGear(dt); // the gear travels up or down
+    if (this.onGround && this.groundStep && !this.dying) { this.groundStep(dt); return; } // rolling on its wheels
 
     if (this.dying) {
       this.dyingT += dt;
@@ -594,7 +601,8 @@ class Aircraft extends Jet {
     const auth = lowAuth * highAuth * (0.4 + 0.6 * Math.sqrt(rho));
     const gMax = 11 * this.gMul * K; // more g at higher speed keeps the turn RATE the same
     const pitchCap = Math.min((H ? SP.pitchLim : 62) * DEG, (gMax * 9.81) / Math.max(spd, 90));
-    const stallF = H ? 1 - smoothstep(SP.stall[0], SP.stall[1], spd) : 1 - smoothstep(62, 108, spd);
+    const spdE = spd * (1 + 0.14 * (this.gearT || 0)); // gear (and flaps) down: it can fly a little slower before it stalls
+    const stallF = H ? 1 - smoothstep(SP.stall[0], SP.stall[1], spdE) : 1 - smoothstep(62, 108, spdE);
     this.stalled = stallF > 0.35;
 
     // in a stall the nose drops toward the flight path (weathervane) so the jet falls forward and recovers
@@ -661,6 +669,7 @@ class Aircraft extends Jet {
     const M = spd / (SPEED_OF_SOUND * this.machScale);
     const cd = 1.15e-4 + (H ? 1.0e-4 : 0.4e-4) * smoothstep(0.9, 1.1, M);
     let drag = cd * spd * spd * (0.3 + 0.7 * rho) * (H && SP.dragK ? SP.dragK : 1);
+    drag += (this.gearT || 0) * (H ? 1.4e-4 : 1.1e-4) * spd * spd; // the gear hanging in the airstream
     if (inp.brake) drag += 3.4e-4 * spd * spd;
     const omega = Math.hypot(this.rates.p, this.rates.y);
     const nLoad = (spd * omega) / 9.81;
@@ -681,6 +690,7 @@ class Aircraft extends Jet {
     this.vel.copy(this.vdir).multiplyScalar(spd);
     this.pos.addScaledVector(this.vel, dt);
     this.mach = spd / (SPEED_OF_SOUND * this.machScale);
+    if (this.checkTouchdown) this.checkTouchdown(dt); // wheels meeting the ground?
 
     const turn = Math.acos(clamp(this.vdir.dot(this._lastVdir), -1, 1)) / Math.max(dt, 1e-4);
     this.nLoad += (Math.sqrt(1 + Math.pow((turn * spd) / 9.81, 2)) - this.nLoad) * (1 - Math.exp(-dt * 6));

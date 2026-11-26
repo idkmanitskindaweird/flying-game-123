@@ -308,6 +308,21 @@ function drawFlightHUD(m, ctx, w, h) {
   }
   hudText(ctx, `MSL ${m.missiles}`, w - 22, 28, 18 + sc * 3, m.missiles > 0 ? HUD_COL : HUD_BAD, 'right', 700);
   hudText(ctx, 'GUN', w - 22, 52, 13 + sc * 2, HUD_DIM, 'right', 600);
+  // landing gear: three lights (green = down and locked, amber = moving, dark = up)
+  if (p.gearT !== undefined) {
+    const gx = 28, gy = m.kind === 'dogfight' ? 84 : 62, down = p.gearT > 0.98, moving = p.gearT > 0.02 && p.gearT < 0.98;
+    const col = down ? '#5cff8a' : moving ? '#ffc04a' : 'rgba(90,120,100,0.5)';
+    for (let i = 0; i < 3; i++) { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(gx + i * 15, gy, 5, 0, TAU); ctx.fill(); }
+    hudText(ctx, down ? 'GEAR DOWN' : moving ? 'GEAR' : 'GEAR UP', gx + 54, gy, 12 + sc * 2, down ? '#5cff8a' : moving ? '#ffc04a' : HUD_DIM, 'left', 700);
+    if (!p.onGround && p.gearT > 0.75 && p.vel.y < 0) { // on final: how hard would the touchdown be?
+      const agl = p.pos.y - m.app.world.surfaceAt(p.pos.x, p.pos.z);
+      if (agl < 120) {
+        const sink = -p.vel.y, safe = p.heavy ? 5.6 : 8, hard = p.heavy ? 10 : 15;
+        hudText(ctx, 'SINK ' + sink.toFixed(1) + ' m/s' + (agl < (p.heavy ? 24 : 22) ? '  ·  FLARE' : ''), gx - 6, gy + 18, 12 + sc * 2, sink < safe ? '#5cff8a' : sink < hard ? '#ffc04a' : HUD_BAD, 'left', 700);
+      }
+    }
+    if (p.onGround) hudText(ctx, 'ON GROUND  ' + Math.round(p.speed * 3.6) + ' km/h' + (p.speed > p.vr * 0.9 && p.speed < p.vlift ? '  ·  ROTATE' : ''), gx - 6, gy + 18, 12 + sc * 2, HUD_COL, 'left', 700);
+  }
   if (tgt && tgt.alive) {
     const d = tgt.pos.distanceTo(p.pos);
     hudText(ctx, `TGT ${fmtRange(d)}`, w - 22, 76, 13 + sc * 2, m.lockT >= m.lockNeed ? HUD_BAD : HUD_WARN, 'right', 700);
@@ -319,6 +334,7 @@ function drawFlightHUD(m, ctx, w, h) {
   // warnings
   const warns = [];
   if (m.warnPullUp) warns.push(['PULL UP', HUD_BAD]);
+  if (!p.gearDown && !p.onGround && p.vel.y < -2 && p.speed < (p.heavy ? p.spec.stall[1] * 2.4 : 160) && p.pos.y - m.app.world.surfaceAt(p.pos.x, p.pos.z) < 220 && Math.floor(m.app.time * 2) % 2 === 0) warns.push(['GEAR', HUD_BAD]);
   if (p.stalled) warns.push(['STALL', HUD_WARN]);
   if (p.hp < 30) warns.push(['HULL CRITICAL', HUD_BAD]);
   warns.forEach((wn, i) => {
@@ -332,7 +348,7 @@ function drawFlightHUD(m, ctx, w, h) {
     ctx.globalAlpha = Math.min(1, m.hintT);
     const lines = [
       'W/S pitch   A/D roll   Q/E rudder   SHIFT afterburner   X brake',
-      'SPACE cannon   F missile (lock first)   R next target   V camera   P pause',
+      'SPACE cannon   F missile (lock first)   R next target   V camera   L landing gear   N nuke   P pause',
     ];
     lines.forEach((t, i) => hudText(ctx, t, w / 2, h - 124 + i * 24, 14 + sc * 2, 'rgba(235,245,255,0.95)', 'center', 600));
     ctx.globalAlpha = 1;

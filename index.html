@@ -10,7 +10,7 @@
    GitHub Pages lets a browser keep an old index.html for up to 10 minutes. If this copy of the page is older than the game's files,
    it asks version.json (never cached) which build is current and reloads itself ONCE with a fresh copy, so nobody ever has to clear
    their cache. The scripts below are loaded with ?v=BUILD so they always match this page. */
-var BUILD = '20261125i';
+var BUILD = '20261126i';
 window.__errs = []; // script errors, so the game can say what went wrong if a file fails to load
 window.addEventListener('error', function (e) { window.__errs.push(String(e.filename || '').split('/').pop() + ':' + e.lineno + ' ' + e.message); });
 (function () {
@@ -96,6 +96,8 @@ if (!window.__redirecting) document.write('<link rel="stylesheet" href="css/styl
             <tr><td><kbd>F</kbd> / Right click</td><td>Homing missile (lock first)</td></tr>
             <tr><td><kbd>R</kbd> / <kbd>Tab</kbd></td><td>Select next target</td></tr>
             <tr><td><kbd>V</kbd></td><td>Chase / cockpit camera</td></tr>
+            <tr><td><kbd>L</kbd></td><td>Landing gear up / down (not with weight on the wheels). On the ground: <kbd>Shift</kbd> full power, <kbd>X</kbd> brakes, <kbd>A</kbd><kbd>D</kbd> steer, <kbd>S</kbd> rotate for take-off</td></tr>
+            <tr><td><kbd>N</kbd> / <kbd>B</kbd></td><td>Arm the nuke (shows the bombsight) / cancel. <kbd>N</kbd> again drops it</td></tr>
             <tr><td><kbd>G</kbd></td><td>Start / stop recording this flight (watch it from the menu: Replay)</td></tr>
             <tr><td><kbd>P</kbd> / <kbd>Esc</kbd></td><td>Pause</td></tr>
           </table>
@@ -151,6 +153,8 @@ if (!window.__redirecting) document.write('<link rel="stylesheet" href="css/styl
         <select id="s-weather"><option value="fair">Fair</option><option value="cloudy">Cloudy</option><option value="storm">Stormy (thunderstorms)</option></select></label>
       <label class="field"><span>Hurricane</span>
         <select id="s-hurricane"><option value="off">No hurricane</option><option value="on">Add a hurricane</option></select></label>
+      <label class="field"><span>Free Flight start</span>
+        <select id="s-start"><option value="runway">On the runway (take off yourself)</option><option value="air">In the air</option></select></label>
       <label class="field"><span>Units</span>
         <select id="s-units"><option value="imperial">Knots / feet</option><option value="metric">km/h / metres</option></select></label>
       <label class="check"><input type="checkbox" id="s-invert"> Invert pitch (W = pull up)</label>
@@ -355,7 +359,7 @@ if (!window.__redirecting) document.write('<link rel="stylesheet" href="css/styl
 <script>
 (function () {
   if (window.__redirecting) return;
-  var files = ['lib/three.min.js', 'js/util.js', 'js/world.js', 'js/city.js', 'js/particles.js', 'js/fireball.js', 'js/jet.js', 'js/c17.js', 'js/airliners.js', 'js/clouds.js', 'js/weather.js', 'js/audio.js', 'js/flyby.js', 'js/hud.js', 'js/crash.js', 'js/collision.js', 'js/blast.js', 'js/combat.js', 'js/replay.js', 'js/main.js'];
+  var files = ['lib/three.min.js', 'js/util.js', 'js/world.js', 'js/city.js', 'js/particles.js', 'js/fireball.js', 'js/jet.js', 'js/c17.js', 'js/airliners.js', 'js/gear.js', 'js/clouds.js', 'js/weather.js', 'js/audio.js', 'js/flyby.js', 'js/hud.js', 'js/crash.js', 'js/collision.js', 'js/blast.js', 'js/combat.js', 'js/replay.js', 'js/main.js'];
   for (var i = 0; i < files.length; i++) document.write('<script src="' + files[i] + '?v=' + BUILD + '" charset="utf-8" onerror="window.__errs.push(&quot;LOAD FAILED: &quot; + this.src)"><\/script>');
 })();
 </script>

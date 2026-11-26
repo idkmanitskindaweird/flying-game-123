@@ -210,9 +210,11 @@ class FlyMode {
     this.heavy = heavy;
     const p = new Aircraft({ palette: heavy ? 'c17' : 'steel', type: ptype, team: 'player', name: 'YOU' });
     p.assist = Settings.data.assist;
+    p.groundFn = groundHeightFor(app.world); // for the wheels
     const gy = app.world.surfaceAt(-1200, 140);
     if (kind === 'free') p.place(0, gy + 470, 1100, 0, heavy ? PLANES[ptype].startSpeed : 210 * FIGHTER_SPEED); // fly north: the city is straight ahead
     else p.place(-1200, gy + 520, 140, -PI / 2, 210 * FIGHTER_SPEED);
+    if (kind === 'free' && (Settings.data.spawn || 'runway') === 'runway') p.parkAt(-1000, 0, -PI / 2); // start on the runway, ready to take off
     p.resetHistory(app.time);
     p.syncVisual(app.time);
     app.scene.add(p.group);
@@ -229,7 +231,8 @@ class FlyMode {
     }
     if (kind === 'free') {
       this.waveTimer = 1e9;
-      this.pushMsg('FREE FLIGHT', 'Cruise the coast and mountains. Press V for the cockpit view.', HUD_COL, 26, 4);
+      if (p.onGround) this.pushMsg('ON THE RUNWAY', 'SHIFT throttle  ·  S rotate at ' + Math.round(p.vr * 1.0) + ' m/s  ·  X brake  ·  L gear', HUD_COL, 26, 6);
+      else this.pushMsg('FREE FLIGHT', 'Cruise the coast and mountains. Press V for the cockpit view.  L: landing gear', HUD_COL, 26, 4);
     }
   }
 
@@ -246,6 +249,7 @@ class FlyMode {
     this.recD = [];
     this.recWings = [];
     this.recNukes = [];
+    this.recGear = [{ t: 0, down: !!this.player.gearDown }];
     this.recN = 0;
     this.recKind = this.player.heavy ? this.player.spec.key : 'fighter';
     this.recSample();
@@ -263,7 +267,7 @@ class FlyMode {
     if (crash && this.player) this.recSample(); // the very last frame: the moment of impact
     this.recOn = false;
     if (this.recN >= 60) {
-      App.recording = { dt: REC_DT, n: this.recN, d: this.recD, kind: this.recKind, crash: crash || null, wings: this.recWings || [], nukes: this.recNukes || [] };
+      App.recording = { dt: REC_DT, n: this.recN, d: this.recD, kind: this.recKind, crash: crash || null, wings: this.recWings || [], nukes: this.recNukes || [], gear: this.recGear || [] };
       if (typeof ReplayStore !== 'undefined') ReplayStore.saveLatest(App.recording);
       if (App.refreshReplayUI) App.refreshReplayUI();
       if (!silent) this.app.toast(`Recording saved (${fmtTime((this.recN - 1) * REC_DT)}) — watch it from the menu: Replay`, 4200);
@@ -383,6 +387,16 @@ class FlyMode {
           this.pushMsg('NUKE ARMED', 'aim the diamond  ·  N: drop  ·  B: cancel', HUD_WARN, 26, 3.2);
         } else this.dropNuke(); // second press: drop it
         return true;
+      case 'KeyL': { // landing gear
+        const p = this.player, msg = p.toggleGear ? p.toggleGear() : null;
+        if (msg === 'WEIGHT ON WHEELS' || msg === 'TOO FAST FOR THE GEAR') this.pushMsg(msg, null, HUD_WARN, 22, 1.6);
+        else if (msg) {
+          this.pushMsg(msg, null, HUD_COL, 22, 1.6);
+          if (this.app.audio && this.app.audio.ok && this.app.audio.gearMove) this.app.audio.gearMove(p.heavy);
+          if (this.recOn && this.recGear) this.recGear.push({ t: (this.recN - 1) * REC_DT, down: p.gearDown });
+        }
+        return true;
+      }
       case 'KeyB':
         if (this.nukes && this.nukes.armed) { this.nukes.armed = false; this.pushMsg('NUKE SAFE', null, HUD_COL, 22, 1.5); return true; }
         return false;
@@ -699,7 +713,7 @@ class FlyMode {
           const s = boxes[i];
           if (lost && lost[s.part]) continue; // a wing that is gone cannot hit anything
           _hbv.set(s.x, s.y, s.z).applyQuaternion(q).add(_hbp);
-          if (_hbv.y - s.r < w.surfaceAt(_hbv.x, _hbv.z) || (city && city.sphereHit(_hbv.x, _hbv.y, _hbv.z, s.r))) { res = s.part; break; }
+          if (_hbv.y - (jet.onGround || jet.gearT > 0.75 ? -0.45 : s.r * 0.35) < w.surfaceAt(_hbv.x, _hbv.z) || (city && city.sphereHit(_hbv.x, _hbv.y, _hbv.z, s.r))) { res = s.part; break; } // (the ground test uses the surface the spheres sit on, not their inflated size)
         }
         if (res) break;
       }
@@ -707,6 +721,22 @@ class FlyMode {
     }
     prev.copy(cur);
     return res;
+  }
+
+  /** the ground physics reports a touchdown, a hard landing, a crash or a lift-off */
+  onGroundEvent(ev) {
+    const app = this.app, p = this.player, fx = app.fx;
+    if (ev.kind === 'crash') { this.pushMsg(ev.why === 'terrain' ? 'TERRAIN TOO STEEP' : 'CRASH LANDING', ev.why && ev.why !== 'terrain' ? ev.why : null, HUD_BAD, 26, 3.5); this.playerDie('CRASHED'); return; }
+    if (ev.kind === 'liftoff') { this.pushMsg('AIRBORNE', 'L: gear up', HUD_COL, 24, 2.2); return; }
+    const hard = ev.kind === 'hard';
+    this.pushMsg(hard ? 'HARD LANDING' : ev.sink < 1.2 ? 'SMOOTH TOUCHDOWN' : 'TOUCHDOWN', ev.sink.toFixed(1) + ' m/s sink', hard ? HUD_BAD : HUD_COL, 26, 2.8);
+    if (app.audio && app.audio.ok && app.audio.touchdown) app.audio.touchdown(hard ? 1.7 : 0.7 + Math.min(0.8, ev.sink / 6));
+    this.shake = Math.min(1.4, this.shake + (hard ? 0.9 : 0.25 + ev.sink * 0.05));
+    // a puff of tyre smoke from every wheel that touched
+    for (const pt of gearPointsFor(p)) {
+      _hbv.set(pt.x, pt.y, pt.z).applyQuaternion(p.quat).add(p.pos);
+      for (let i = 0; i < 4; i++) fx.puff(_hbv.x + rand(-0.4, 0.4), _hbv.y + 0.2, _hbv.z + rand(-0.4, 0.4), p.vel.x * 0.35 + rand(-1.5, 1.5), rand(0.5, 2.5), p.vel.z * 0.35 + rand(-1.5, 1.5), rand(1.2, 2.2), 1.6, 5.5, 0.82, 0.6, 1.2, 0.2);
+    }
   }
 
   /** a wing hits something and is torn off: the aircraft survives, but spins out of control */
@@ -842,8 +872,9 @@ class FlyMode {
       const fire = this.readInput(dt);
       p.turb = app.world.weather ? app.world.weather.turbAt(p.pos) : 0; // thunderstorms buffet the aircraft
       const wnd = app.world.weather && app.world.weather.windAt(p.pos); // a hurricane's winds carry it around the eye
-      if (wnd) { p.pos.x += wnd.x * dt; p.pos.z += wnd.z * dt; }
+      if (wnd && !p.onGround) { p.pos.x += wnd.x * dt; p.pos.z += wnd.z * dt; } // (the wind does not push a parked aircraft along)
       p.step(dt);
+      if (p.groundEvent) { const ev = p.groundEvent; p.groundEvent = null; this.onGroundEvent(ev); }
       if (this.recOn) {
         this.recAcc += dt;
         while (this.recAcc >= REC_DT) { this.recAcc -= REC_DT; this.recSample(); }
@@ -872,7 +903,7 @@ class FlyMode {
       // pull-up warning
       const ah = _ca.copy(p.vdir).multiplyScalar(p.speed * 2.2).add(p.pos);
       const clear = ah.y - app.world.surfaceAt(ah.x, ah.z);
-      this.warnPullUp = (clear < 45 && p.vdir.y < 0.12) || (p.pos.y - g < 70 && p.vel.y < -25);
+      this.warnPullUp = !p.onGround && !(p.gearT > 0.9 && p.speed < (p.heavy ? p.spec.stall[1] * 2.2 : 180)) && ((clear < 45 && p.vdir.y < 0.12) || (p.pos.y - g < 70 && p.vel.y < -25)); // (on final with the gear down is not a pull-up)
       if (this.warnPullUp || p.stalled) {
         this.alarmT -= dt;
         if (this.alarmT <= 0) { this.alarmT = 0.7; if (app.audio && app.audio.ok) app.audio.alarm(); }
