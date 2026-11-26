@@ -10,7 +10,7 @@
    GitHub Pages lets a browser keep an old index.html for up to 10 minutes. If this copy of the page is older than the game's files,
    it asks version.json (never cached) which build is current and reloads itself ONCE with a fresh copy, so nobody ever has to clear
    their cache. The scripts below are loaded with ?v=BUILD so they always match this page. */
-var BUILD = '20261126i';
+var BUILD = '20261126k';
 window.__errs = []; // script errors, so the game can say what went wrong if a file fails to load
 window.addEventListener('error', function (e) { window.__errs.push(String(e.filename || '').split('/').pop() + ':' + e.lineno + ' ' + e.message); });
 (function () {
@@ -150,7 +150,7 @@ if (!window.__redirecting) document.write('<link rel="stylesheet" href="css/styl
       </details>
       <div class="row"><button class="primary hidden" id="s-apply">Apply graphics (reloads the game)</button></div>
       <label class="field"><span>Weather</span>
-        <select id="s-weather"><option value="fair">Fair</option><option value="cloudy">Cloudy</option><option value="storm">Stormy (thunderstorms)</option></select></label>
+        <select id="s-weather"><option value="fair">Fair</option><option value="cloudy">Cloudy</option><option value="storm">Stormy (thunderstorms)</option><option value="snow">Snowy</option></select></label>
       <label class="field"><span>Hurricane</span>
         <select id="s-hurricane"><option value="off">No hurricane</option><option value="on">Add a hurricane</option></select></label>
       <label class="field"><span>Free Flight start</span>

@@ -367,7 +367,7 @@ class Terrain {
     this.detailTex = makeDetailTexture();
 
     // the weather's effect on the ground: moving cloud shadows and the darkening of wet ground (World.update drives these)
-    this.wxU = this.wxU || { uCloud: { value: 0.5 }, uWxTime: { value: 0 }, uWxWind: { value: new THREE.Vector2(WX_WIND.x, WX_WIND.z) }, uWet: { value: 0 } };
+    this.wxU = this.wxU || { uCloud: { value: 0.5 }, uWxTime: { value: 0 }, uWxWind: { value: new THREE.Vector2(WX_WIND.x, WX_WIND.z) }, uWet: { value: 0 }, uSnow: { value: 0 } };
     const wxU = this.wxU;
     this.mats = [];
     for (let L = 0; L <= this.MAXL; L++) {
@@ -375,12 +375,12 @@ class Terrain {
       const tex = this.detailTex;
       m.onBeforeCompile = (shader) => {
         shader.uniforms.uDetail = { value: tex };
-        shader.uniforms.uCloud = wxU.uCloud; shader.uniforms.uWxTime = wxU.uWxTime; shader.uniforms.uWxWind = wxU.uWxWind; shader.uniforms.uWet = wxU.uWet;
+        shader.uniforms.uCloud = wxU.uCloud; shader.uniforms.uWxTime = wxU.uWxTime; shader.uniforms.uWxWind = wxU.uWxWind; shader.uniforms.uWet = wxU.uWet; shader.uniforms.uSnow = wxU.uSnow;
         shader.vertexShader = shader.vertexShader
           .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
           .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;');
         shader.fragmentShader = shader.fragmentShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D uDetail;\nuniform float uCloud;\nuniform float uWxTime;\nuniform float uWet;\nuniform vec2 uWxWind;')
+          .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D uDetail;\nuniform float uCloud;\nuniform float uWxTime;\nuniform float uWet;\nuniform float uSnow;\nuniform vec2 uWxWind;')
           .replace(
             '#include <color_fragment>',
             `#include <color_fragment>
@@ -393,7 +393,11 @@ class Terrain {
             float shade = smoothstep(cth - 0.05, cth + 0.09, cs);
             diffuseColor.rgb *= 1.0 - 0.34 * shade * min(uCloud * 1.2, 0.9);
             // rain soaks the ground: darker and a touch bluer
-            diffuseColor.rgb *= vec3(1.0 - 0.3 * uWet, 1.0 - 0.26 * uWet, 1.0 - 0.2 * uWet);`
+            diffuseColor.rgb *= vec3(1.0 - 0.3 * uWet, 1.0 - 0.26 * uWet, 1.0 - 0.2 * uWet);
+            // snow: it lies deepest on the high ground and settles down to the lowlands as it keeps snowing
+            float snowLine = mix(1200.0, -120.0, uSnow);
+            float sn = smoothstep(snowLine - 90.0, snowLine + 150.0, vWPos.y + (dn - 0.5) * 140.0);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.99), sn * uSnow);`
           );
       };
       this.mats.push(m);
@@ -1057,6 +1061,7 @@ class World {
       wu.uWxTime.value = this.time;
       wu.uCloud.value = this.clouds.coverage;
       wu.uWet.value += (this.weather.wetTarget(p) - wu.uWet.value) * (1 - Math.exp(-dt * 0.25)); // the ground soaks and dries slowly
+      wu.uSnow.value = this.weather.snow; // (snow settles as the weather's snow amount rises)
     }
   }
 }

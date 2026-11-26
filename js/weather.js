@@ -49,7 +49,7 @@ function makeRainTexture() {
   return t;
 }
 
-const _rainV = new THREE.Vector3();
+const _rainV = new THREE.Vector3(), _rainF = new THREE.Vector3(), _rainA = new THREE.Vector3(), _rainU = new THREE.Vector3(), _rainW = new THREE.Vector3(), _rainUp = new THREE.Vector3(0, 1, 0);
 
 class StormCell {
   constructor(weather, x, z, r, seed) {
@@ -247,6 +247,16 @@ class Weather {
       scene.add(s);
       this.bolt.push(s);
     }
+    // the forks: side branches off the main bolt
+    this.fork = [];
+    for (let i = 0; i < 44; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xc8d8ff, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false, toneMapped: false }));
+      s.visible = false;
+      scene.add(s);
+      this.fork.push(s);
+    }
+    this.snow = 0;
+    this.flakes = [];
     this.boltLife = 0;
     this.cells = [];
     const spots = [[3500, -9500, 3000], [-9000, -4500, 3400], [9500, 2500, 2800], [-2500, 10500, 3200]];
@@ -262,6 +272,8 @@ class Weather {
     this.rainGain = 0;
     this.hurricane = null; this.hurrTimer = 3; this.hurrWind = { x: 0, z: 0 };
     this.fogColCloud = new THREE.Color(0xdfe5ec);
+    this.skySnow = { top: new THREE.Color(0x8c97a6), mid: new THREE.Color(0xb6bfca), hor: new THREE.Color(0xd3d9e0) };
+    this.fogColSnow = new THREE.Color(0xcdd4dd);
     this.setMode((typeof Settings !== 'undefined' && Settings.data.weather) || 'cloudy');
     this.setHurricane(typeof Settings !== 'undefined' && Settings.data.hurricane === 'on');
   }
@@ -269,7 +281,7 @@ class Weather {
   setMode(m) {
     this.mode = m;
     const cl = this.world.clouds;
-    if (cl) { cl.setCoverage(m === 'fair' ? 0.3 : m === 'cloudy' ? 0.85 : 1); cl.setTint(m === 'storm' ? 0.74 : 1); }
+    if (cl) { cl.setCoverage(m === 'fair' ? 0.3 : m === 'cloudy' ? 0.85 : 1); cl.setTint(m === 'storm' ? 0.74 : m === 'snow' ? 0.9 : 1); }
     this.group.visible = m === 'storm';
     if (m !== 'storm' && !this.hurricane) { this.I = 0; this.apply(0, 0, 0); this.setBolt(false); }
   }
@@ -346,16 +358,18 @@ class Weather {
     u.uTop.value.copy(this.skyBase.top).lerp(this.skyStorm.top, sky);
     u.uMid.value.copy(this.skyBase.mid).lerp(this.skyStorm.mid, sky);
     u.uHor.value.copy(this.skyBase.hor).lerp(this.skyStorm.hor, sky);
+    if (this.snow > 0.01) { u.uTop.value.lerp(this.skySnow.top, this.snow); u.uMid.value.lerp(this.skySnow.mid, this.snow); u.uHor.value.lerp(this.skySnow.hor, this.snow); }
     const fc = this.fogColBase.clone().lerp(this.fogColStorm, Math.max(sky * 0.5, I));
+    if (this.snow > 0.01) fc.lerp(this.fogColSnow, this.snow * 0.92); // a pale, muffled winter haze
     if (inCloud > 0) fc.lerp(this.fogColCloud, inCloud * 0.9); // inside a cloud the world goes pale grey-white
     this.scene.fog.color.copy(fc);
     this.scene.background.copy(fc);
-    this.scene.fog.density = this.fogBase * (1 + 55 * I * I + 1.5 * sky + 38 * inCloud * inCloud);
-    this.world.sunLight.intensity = this.sunBase * (1 - 0.35 * sky - 0.35 * I - 0.3 * inCloud);
+    this.scene.fog.density = this.fogBase * (1 + 55 * I * I + 1.5 * sky + 38 * inCloud * inCloud + 5 * this.snow);
+    this.world.sunLight.intensity = this.sunBase * (1 - 0.35 * sky - 0.35 * I - 0.3 * inCloud - 0.32 * this.snow);
     this.world.hemi.intensity = this.hemiBase * (1 - 0.2 * sky - 0.15 * I);
   }
 
-  setBolt(on) { for (const s of this.bolt) s.visible = on; }
+  setBolt(on) { for (const s of this.bolt) s.visible = on; for (const s of this.fork) s.visible = on; }
 
   strike(cell, cam) {
     const sx = cell.x + rand(-0.6, 0.6) * cell.r, sz = cell.z + rand(-0.6, 0.6) * cell.r;
@@ -373,6 +387,22 @@ class Weather {
       s.scale.set(sz2, sz2 * 1.2, 1);
       s.visible = true;
     }
+    // forks: three branches that leave the main bolt and head off sideways and down
+    let fi = 0;
+    for (let b = 0; b < 3; b++) {
+      const i0 = 6 + Math.floor(Math.random() * this.bolt.length * 0.55), p0 = this.bolt[i0].position;
+      let fx = p0.x, fy = p0.y, fz = p0.z;
+      const ang = rand(0, TAU), dx = Math.cos(ang), dz = Math.sin(ang), n = 13;
+      for (let k = 0; k < n && fi < this.fork.length; k++) {
+        const s = this.fork[fi++];
+        fx += dx * rand(22, 60) + rand(-24, 24); fz += dz * rand(22, 60) + rand(-24, 24); fy -= rand(24, 58);
+        s.position.set(fx, fy, fz);
+        const sz = 30 - 20 * (k / n);
+        s.scale.set(sz, sz * 1.15, 1);
+        s.visible = true;
+      }
+    }
+    for (; fi < this.fork.length; fi++) this.fork[fi].visible = false;
     this.boltPos = new THREE.Vector3(x, gy + 150, z);
     this.boltLife = 0.45;
     this.flash = 1;
@@ -389,9 +419,11 @@ class Weather {
   update(dt, cam) {
     const storm = this.mode === 'storm', hur = this.hurricane;
     const inCloud = this.world.clouds && this.world.clouds.inside ? this.world.clouds.inside : 0;
+    this.snow += ((this.mode === 'snow' ? 1 : 0) - this.snow) * (1 - Math.exp(-dt * 0.6)); // the snow comes and goes gradually
+    if (this.snow < 0.002) this.snow = 0;
     if (!storm && !hur) {
-      // fair / cloudy weather: only the white-out inside an ordinary cloud
-      if (inCloud > 0.01 || this._wasCloud) { this.apply(0, 0, inCloud); this._wasCloud = inCloud > 0.01; }
+      // fair / cloudy / snowy weather: only the white-out inside an ordinary cloud, and the snow's look
+      if (inCloud > 0.01 || this._wasCloud || this.snow > 0) { this.apply(this.snow * 0.5, 0, inCloud); this._wasCloud = inCloud > 0.01 || this.snow > 0; }
       return;
     }
     this._wasCloud = true;
@@ -441,6 +473,7 @@ class Weather {
     const flick = this.boltLife > 0 ? (Math.sin(t * 38) > -0.2 ? 1 : 0.35) * Math.exp(-t * 4.5) : 0;
     this.flash = Math.max(flick, this.sheet * 0.55);
     for (const s of this.bolt) { if (this.boltLife <= 0) s.visible = false; else s.material.opacity = Math.min(1, flick * 1.4); }
+    for (const s of this.fork) { if (this.boltLife <= 0) s.visible = false; else s.material.opacity = Math.min(1, flick * 1.0); }
     this.light.intensity = 9 * this.flash;
     for (const c of this.cells) c.mat.uniforms.uTint.value.setScalar(0.82 * (1 + 1.3 * this.flash));
     if (hur) hur.mat.uniforms.uTint.value.setScalar(0.85 * (1 + 0.9 * this.flash));
@@ -534,8 +567,110 @@ class Weather {
   }
 
   /** rain on the glass and the flash of lightning, drawn over the 3D view */
+  /** the sun's glow and light shafts through the cloud, and a rainbow when you are near rain with the sun behind you */
+  drawSky(ctx, w, h) {
+    const app = typeof App !== 'undefined' ? App : null;
+    if (!app || !app.camera) return;
+    const cam = app.camera, cp = this.world.camPos || cam.position, sd = SUN_DIR;
+    const fwd = _rainF.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    const dot = fwd.x * sd.x + fwd.y * sd.y + fwd.z * sd.z;
+    const cov = this.world.clouds ? this.world.clouds.coverage : 0.5;
+    const dark = 1 - Math.min(1, this.I * 1.4 + (this.mode === 'storm' ? 0.55 : 0) + this.snow * 0.35); // no direct sun in a storm
+    if (dot > 0.4 && dark > 0.05 && sd.y > 0.02) {
+      const q = _rainV.set(cp.x + sd.x * 5000, cp.y + sd.y * 5000, cp.z + sd.z * 5000).project(cam);
+      if (q.z < 1) {
+        const sx = (q.x * 0.5 + 0.5) * w, sy = (-q.y * 0.5 + 0.5) * h, g = smoothstep(0.4, 0.97, dot) * dark;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const gr = ctx.createRadialGradient(sx, sy, 0, sx, sy, h * 0.9);
+        gr.addColorStop(0, `rgba(255,226,170,${0.3 * g})`); gr.addColorStop(0.12, `rgba(255,200,130,${0.13 * g})`); gr.addColorStop(1, 'rgba(255,190,120,0)');
+        ctx.fillStyle = gr; ctx.fillRect(0, 0, w, h);
+        const sa = g * (0.25 + 0.75 * Math.min(1, cov * 1.2)) * 0.075; // shafts need cloud to cast them
+        if (sa > 0.004) {
+          const gr2 = ctx.createRadialGradient(sx, sy, 0, sx, sy, w * 0.9);
+          gr2.addColorStop(0, `rgba(255,236,200,${sa * 1.6})`); gr2.addColorStop(1, 'rgba(255,236,200,0)');
+          ctx.fillStyle = gr2;
+          const t = app.time || 0, L = w * 1.2;
+          for (let i = 0; i < 16; i++) {
+            const a = (i / 16) * TAU + Math.sin(t * 0.07 + i * 1.9) * 0.08, wd = 0.011 + 0.02 * ((i * 37) % 7) / 7;
+            ctx.beginPath(); ctx.moveTo(sx, sy);
+            ctx.lineTo(sx + Math.cos(a - wd) * L, sy + Math.sin(a - wd) * L);
+            ctx.lineTo(sx + Math.cos(a + wd) * L, sy + Math.sin(a + wd) * L);
+            ctx.closePath(); ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+    }
+    // a rainbow: opposite the sun, 42 degrees from the shadow of your head, when you are near (not in) the rain
+    if (sd.y > 0.04 && sd.y < 0.78) {
+      let near = 0;
+      if (this.mode === 'storm') for (const c of this.cells) near = Math.max(near, 1 - smoothstep(c.r * 1.1, c.r * 3.4, Math.hypot(c.x - cp.x, c.z - cp.z)));
+      if (this.hurricane) near = Math.max(near, 0.8 * (1 - smoothstep(this.hurricane.R * 1.1, this.hurricane.R * 2.4, Math.hypot(cp.x - this.hurricane.x, cp.z - this.hurricane.z))));
+      near *= 1 - Math.min(1, this.I * 3);
+      if (near > 0.03) {
+        const anti = _rainA.set(-sd.x, -sd.y, -sd.z), u = _rainU.crossVectors(anti, _rainUp).normalize(), v = _rainW.crossVectors(anti, u);
+        const cols = ['255,60,60', '255,150,40', '255,235,70', '90,230,90', '70,170,255', '110,90,255', '190,90,255'];
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.lineWidth = Math.max(2, h * 0.011);
+        for (let j = 0; j < cols.length; j++) {
+          const ang = (41.4 - j * 0.45) * DEG, ca = Math.cos(ang), sa = Math.sin(ang);
+          ctx.strokeStyle = `rgba(${cols[j]},${0.3 * near})`;
+          ctx.beginPath();
+          let pen = false;
+          for (let k = 0; k <= 56; k++) {
+            const ph = (k / 56) * TAU, cph = Math.cos(ph), sph = Math.sin(ph);
+            const dx = anti.x * ca + (u.x * cph + v.x * sph) * sa, dy = anti.y * ca + (u.y * cph + v.y * sph) * sa, dz = anti.z * ca + (u.z * cph + v.z * sph) * sa;
+            if (dy < 0.02) { pen = false; continue; } // only above the horizon
+            const p = _rainV.set(cp.x + dx * 3000, cp.y + dy * 3000, cp.z + dz * 3000).project(cam);
+            if (p.z >= 1) { pen = false; continue; }
+            const px = (p.x * 0.5 + 0.5) * w, py = (-p.y * 0.5 + 0.5) * h;
+            if (!pen) { ctx.moveTo(px, py); pen = true; } else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+  }
+
+  /** falling snow: flakes of different depth drift down and stream away from the point you are flying towards */
+  drawSnow(ctx, w, h) {
+    const app = typeof App !== 'undefined' ? App : null;
+    const s = this.snow, fl = this.flakes, t = app ? app.time : 0;
+    const dt = Math.min(0.05, (t - (this._ot || t)) || 0.016); this._ot = t;
+    ctx.save();
+    const g = ctx.createRadialGradient(w / 2, h / 2, h * 0.35, w / 2, h / 2, h * 0.95); // a soft pale vignette: the air is full of snow
+    g.addColorStop(0, 'rgba(235,240,250,0)'); g.addColorStop(1, `rgba(235,240,250,${0.2 * s})`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    let vx = w / 2, vy = h * 0.45, spd = 80;
+    const pl = app && app.mode && app.mode.player;
+    if (pl && pl.vdir && app.camera) {
+      const cp = this.world.camPos || app.camera.position;
+      const q = _rainV.set(cp.x + pl.vdir.x * 800, cp.y + pl.vdir.y * 800, cp.z + pl.vdir.z * 800).project(app.camera);
+      if (q.z < 1) { vx = (q.x * 0.5 + 0.5) * w; vy = (-q.y * 0.5 + 0.5) * h; }
+      spd = pl.speed || 80;
+    }
+    const k = clamp(spd / 320, 0.04, 1.3);
+    while (fl.length < 150) fl.push({ x: Math.random() * w, y: Math.random() * h, z: 0.25 + Math.random() * 0.75, ph: Math.random() * TAU });
+    ctx.fillStyle = 'rgba(250,252,255,1)';
+    for (const f of fl) {
+      const dx = f.x - vx, dy = f.y - vy;
+      f.x += dx * k * f.z * 0.9 * dt + Math.sin(t * 1.3 + f.ph) * 8 * f.z * dt;
+      f.y += dy * k * f.z * 0.9 * dt + (22 + 46 * f.z) * dt;
+      if (f.x < -10 || f.x > w + 10 || f.y > h + 10 || f.y < -10) { f.x = Math.random() * w; f.y = -5; f.z = 0.25 + Math.random() * 0.75; }
+      ctx.globalAlpha = (0.35 + 0.55 * f.z) * s;
+      ctx.beginPath(); ctx.arc(f.x, f.y, 0.8 + 2.4 * f.z, 0, TAU); ctx.fill();
+    }
+    ctx.restore();
+  }
+
   drawOverlay(ctx, w, h) {
-    if (this.mode !== 'storm' && !this.hurricane) return;
+    const rainy = this.mode === 'storm' || !!this.hurricane;
+    this.drawSky(ctx, w, h);
+    if (this.snow > 0.02) this.drawSnow(ctx, w, h);
+    if (!rainy) return;
     const I = this.I;
     if (I > 0.03) {
       ctx.save();
